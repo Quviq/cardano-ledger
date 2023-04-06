@@ -40,7 +40,7 @@ import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Monad
 import Test.Cardano.Ledger.Constrained.Rewrite
 import Test.Cardano.Ledger.Constrained.Shrink
-import Test.Cardano.Ledger.Constrained.Size (OrdCond (..), Size (SzRng), runOrdCond)
+import Test.Cardano.Ledger.Constrained.Size
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Generic.Proof (Standard)
@@ -237,6 +237,9 @@ genMapLiteralWithRng env krep vals = do
 data TypeInEra era where
   TypeInEra :: (Show t, Ord t) => Rep era t -> TypeInEra era
 
+data SizeableType era where
+  SizeableType :: Sizeable t => Rep era t -> SizeableType era
+
 genKeyType :: Gen (TypeInEra era)
 genKeyType = elements [TypeInEra IntR]
 
@@ -258,6 +261,18 @@ genType =
     setR (TypeInEra t) = TypeInEra (SetR t)
     listR (TypeInEra t) = TypeInEra (ListR t)
     mapR (TypeInEra s) (TypeInEra t) = TypeInEra (MapR s t)
+
+genSizeableType :: Gen (SizeableType era)
+genSizeableType =
+  oneof
+    [ setR <$> genValType
+    , listR <$> genValType
+    , mapR <$> genKeyType <*> genValType
+    ]
+  where
+    setR (TypeInEra t) = SizeableType (SetR t)
+    listR (TypeInEra t) = SizeableType (ListR t)
+    mapR (TypeInEra s) (TypeInEra t) = SizeableType (MapR s t)
 
 -- | Unsatisfiable constraint returned if we fail during constraint generation.
 errPred :: [String] -> Pred era
@@ -305,6 +320,18 @@ genFromOrdCond cond canBeNegative n =
     )
     (flip (runOrdCond cond) n)
 
+genSize :: Int -> Gen Size
+genSize sz =
+  oneof
+    [ pure SzAny
+    , SzLeast <$> lo
+    , SzMost <$> hi
+    , SzRng <$> lo <*> hi
+    ]
+  where
+    lo = choose (0, sz)
+    hi = choose (sz, sz + 10)
+
 genPredicate :: forall era. Era era => GenEnv era -> Gen (Pred era, GenEnv era)
 genPredicate env =
   frequency $
@@ -332,10 +359,10 @@ genPredicate env =
 
     -- Fixed size
     fixedSizedC = flip suchThat goodSized $ do
-      TypeInEra rep <- genValType
-      withValue (genTerm env (SetR rep) (VarTerm 1)) $ \set val env' ->
-        let n = ExactSize (getSize val)
-         in pure (Sized n set, markSolved (vars set) 1 env')
+      SizeableType rep <- genSizeableType
+      withValue (genTerm env rep (VarTerm 1)) $ \tm val env' -> do
+        sz <- genSize (getSize val)
+        pure (Sized (Lit SizeR sz) tm, markSolved (vars tm) 1 env')
 
     -- Fresh variable for size.
     varSizedC = do
