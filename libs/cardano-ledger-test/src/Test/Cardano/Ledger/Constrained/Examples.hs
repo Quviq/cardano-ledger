@@ -581,6 +581,8 @@ pstatePreds _p =
   , Dom retiring :⊆: Dom regPools
   , -- , Dom futureRegPools :⊆: Dom poolDistr  -- Don't think we want this
     Disjoint (Dom futureRegPools) (Dom retiring)
+  , Random dreps
+  , Random ccHotKeys
   ]
 
 dstatePreds :: Proof era -> [Pred era]
