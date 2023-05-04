@@ -78,7 +78,7 @@ pParamsPreds p =
   , extract (minFeeB p) (pparams p)
   , Sized (AtLeast 100) (maxBHSize p)
   , Sized (AtLeast 100) (maxTxSize p)
-  , SumsTo 1 (maxBBSize p) LTE [One (maxBHSize p), One (maxTxSize p)]
+  , SumsTo (Right 1) (maxBBSize p) LTE [One (maxBHSize p), One (maxTxSize p)]
   , (protVer p) `CanFollow` (prevProtVer p)
   ]
 

@@ -14,7 +14,6 @@ import Test.Cardano.Ledger.Constrained.Classes
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Monad (monadTyped)
 import Test.Cardano.Ledger.Constrained.Rewrite (standardOrderInfo)
-import Test.Cardano.Ledger.Constrained.Size (Size (..))
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
@@ -26,8 +25,8 @@ import Test.Cardano.Ledger.Shelley.Utils (epochFromSlotNo)
 
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import qualified Cardano.Ledger.Alonzo.Scripts as Scripts (Tag (..))
+import Cardano.Ledger.Alonzo.Scripts.Data (Data (..), hashData)
 import Cardano.Ledger.BaseTypes (
-  EpochNo (..),
   Network (..),
   SlotNo (..),
   StrictMaybe (..),
@@ -35,12 +34,9 @@ import Cardano.Ledger.BaseTypes (
   mkCertIxPartial,
  )
 import Cardano.Ledger.Core (EraScript (..), hashScript)
-
--- import Cardano.Ledger.Credential (Credential (..))
-
 import Cardano.Ledger.Credential (Credential (..), Ptr (..), StakeReference (..))
 import Cardano.Ledger.Era (Era (EraCrypto))
-import Cardano.Ledger.Hashes (ScriptHash)
+import Cardano.Ledger.Hashes (DataHash, ScriptHash)
 import Cardano.Ledger.Keys (KeyHash, KeyRole (..), coerceKeyRole)
 import Data.Map (Map)
 import qualified Data.Map.Strict as Map
@@ -49,8 +45,6 @@ import qualified Data.Set as Set
 import Test.Cardano.Ledger.Constrained.Combinators (genFromMap, itemFromSet, mapSized, setSized)
 import Test.Cardano.Ledger.Constrained.Scripts (genCoreScript)
 import Test.Cardano.Ledger.Core.KeyPair (KeyPair (..))
-
--- import Cardano.Ledger.TxIn (TxId(..),TxIn)
 
 -- ===================================================================
 -- Generating a solution for the Universes directly in the Gen monad.
@@ -72,6 +66,15 @@ scriptWits ::
 scriptWits p size tag m vi = do
   scs <- vectorOf size (genCoreScript p tag m vi)
   pure $ Map.fromList $ map (\x -> (hashScript x, ScriptF p x)) scs
+
+dataWits ::
+  Era era =>
+  Proof era ->
+  Int ->
+  Gen (Map (DataHash (EraCrypto era)) (Data era))
+dataWits _p size = do
+  scs <- vectorOf size arbitrary
+  pure $ Map.fromList $ map (\x -> (hashData x, x)) scs
 
 genAddrWith :: Crypto c => Network -> Set Ptr -> Set (Credential 'Staking c) -> Gen (Addr c)
 genAddrWith net ps cs =
@@ -101,6 +104,7 @@ genPtr (SlotNo n) =
 initUniv :: forall era. Reflect era => Proof era -> Gen (Subst era)
 initUniv p = do
   poolsuniv <- setSized ["From init poolsuniv"] 30 (genRep @era PoolHashR)
+  votehashuniv <- setSized ["From init votehashuniv"] 30 (genRep @era VHashR)
   keymapuniv <- mapSized ["From init keymapuniv"] 30 (genRep @era WitHashR) (genRep @era KeyPairR)
   genesisuniv <- mapSized ["From init genesisuniv"] 10 (genRep @era GenHashR) (genRep @era GenDelegPairR)
   txinuniv <- setSized ["From init txinuniv"] 30 (genRep @era TxInR)
@@ -109,6 +113,8 @@ initUniv p = do
   upper <- choose (slotno + 1, slotno + 6)
   let validityinterval = ValidityInterval (SJust (SlotNo lower)) (SJust (SlotNo upper))
   spendscriptuniv <- scriptWits p 40 Scripts.Spend keymapuniv validityinterval
+  scriptuniv <- scriptWits p 40 Scripts.Cert keymapuniv validityinterval
+  datauniv <- dataWits p 15
   creduniv <-
     setSized
       ["From init creduniv"]
@@ -123,15 +129,18 @@ initUniv p = do
   addruniv <- setSized ["From init addruniv"] 30 (genAddrWith networkv ptruniv creduniv)
 
   pure
-    [ item' poolsUniv poolsuniv
+    [ item' poolHashUniv poolsuniv
+    , item' genesisHashUniv genesisuniv
+    , item' voteHashUniv votehashuniv
     , item' keymapUniv keymapuniv
     , item' currentSlot (SlotNo slotno)
     , item' validityInterval validityinterval
     , item' (spendscriptUniv p) spendscriptuniv
+    , item' (scriptUniv p) scriptuniv
+    , item' dataUniv datauniv
     , item' credsUniv creduniv
     , item' payUniv (Set.map coerceKeyRole creduniv)
     , item' voteUniv (Set.map coerceKeyRole creduniv)
-    , item' genesisUniv genesisuniv
     , item' txinUniv txinuniv
     , item' currentEpoch (epochFromSlotNo (SlotNo slotno))
     , item' network networkv
@@ -191,33 +200,19 @@ scriptWitsT ::
 scriptWitsT p size tag m vi =
   Constr "scriptWits" (unReflect scriptWits p size tag) ^$ m ^$ vi
 
-currentSlot :: Term era SlotNo
-currentSlot = Var (V "currentSlot" SlotNoR No)
-
-currentEpoch :: Term era EpochNo
-currentEpoch = Var (V "currentEpoch" EpochR No)
-
-network :: Term era Network
-network = Var (V "network" NetworkR No)
-
-addrUniv :: Term era (Set.Set (Addr (EraCrypto era)))
-addrUniv = Var $ V "addrUniv" (SetR AddrR) No
-
-ptrUniv :: Term era (Set.Set Ptr)
-ptrUniv = Var $ V "ptrUniv" (SetR PtrR) No
-
 universePreds :: Reflect era => Proof era -> [Pred era]
 universePreds p =
   [ Sized (Range 100 500) currentSlot
   , Sized (Range 0 3) beginSlotDelta
   , Sized (Range 1 15) endSlotDelta
-  , Sized (ExactSize 30) poolsUniv
+  , Sized (ExactSize 30) poolHashUniv
+  , Sized (ExactSize 10) genesisHashUniv
+  , Sized (ExactSize 10) voteHashUniv
   , Sized (ExactSize 30) keymapUniv
-  , Sized (ExactSize 10) genesisUniv
   , Sized (ExactSize 40) txinUniv
   , validityInterval :<-: makeValidityT beginSlotDelta currentSlot endSlotDelta
   , Choose
-      (SzExact 30)
+      (ExactSize 30)
       credList
       [ (scriptHashObjT scripthash, [Member scripthash (Dom (spendscriptUniv p))])
       , (keyHashObjT keyhash, [Member keyhash (Dom keymapUniv)])
@@ -225,6 +220,8 @@ universePreds p =
   , credsUniv :<-: listToSetT credList
   , currentEpoch :<-: (Constr "epochFromSlotNo" epochFromSlotNo ^$ currentSlot)
   , GenFrom (spendscriptUniv p) (scriptWitsT p 40 Scripts.Spend keymapUniv validityInterval)
+  , GenFrom (scriptUniv p) (scriptWitsT p 40 Scripts.Cert keymapUniv validityInterval)
+  , GenFrom dataUniv (Constr "dataWits" (dataWits p) ^$ (Lit IntR 15))
   , GenFrom network (constTarget arbitrary) -- Choose Testnet or Mainnet
   , GenFrom ptrUniv (ptrUnivT currentSlot)
   , GenFrom addrUniv (addrUnivT network ptrUniv credsUniv)

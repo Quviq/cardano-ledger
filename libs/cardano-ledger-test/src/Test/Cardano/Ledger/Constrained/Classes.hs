@@ -44,7 +44,7 @@ import Test.Cardano.Ledger.Constrained.Scripts (genCoreScript)
 import Test.Cardano.Ledger.Constrained.Size (AddsSpec (..), Size (..), genFromIntRange, genFromNonNegIntRange)
 import Test.Cardano.Ledger.Conway.Arbitrary ()
 import Test.Cardano.Ledger.Core.Arbitrary ()
-import Test.Cardano.Ledger.Generic.PrettyCore (pcScript, pcTxOut, pcVal)
+import Test.Cardano.Ledger.Generic.PrettyCore (pcDCert, pcScript, pcTxOut, pcVal)
 import Test.Cardano.Ledger.Generic.Proof (
   AllegraEra,
   GoodCrypto,
@@ -303,7 +303,7 @@ instance Sizeable Coin where
   getSize (Coin n) = fromIntegral n
 
 -- ===========================================================
--- The Count classs 0,1,2,3,4 ...
+-- The Count class 0,1,2,3,4 ...
 
 class Count t where
   -- | 'canFollow x y', is 'x' an appropriate successor to 'y'
@@ -341,31 +341,41 @@ instance Count SlotNo where
   genPred n = pure (n - 1)
   genSucc n = pure (n + 1)
 
--- =======================================================================
--- The FromList class
-
-class (Eq a, Eq (t a)) => FromList t a where
-  makeFromList :: [a] -> t a
-  getList :: t a -> [a]
-
-instance Eq a => FromList [] a where
-  makeFromList xs = xs
-  getList xs = xs
-
-instance (Ord a) => FromList Set a where
-  makeFromList xs = Set.fromList xs
-  getList = Set.toList
-
-instance Eq a => FromList Maybe a where
-  makeFromList [] = Nothing
-  makeFromList (x : _) = Just x
-  getList Nothing = []
-  getList (Just x) = [x]
-
 -- ============================================================================
 -- Special accomodation for Type Families
 -- ============================================================================
+data DCertF era where
+  DCertF :: Proof era -> DCert era -> DCertF era
 
+unDCertF :: DCertF era -> DCert era
+unDCertF (DCertF _ x) = x
+
+instance Show (DCertF era) where
+  show (DCertF p x) = show (pcDCert p x)
+
+{-
+instance Ord (DCertF era) where
+  compare (DCertF p x) (DCertF q y) =
+    case testEql p q of
+      Just Refl -> case p of
+         Shelley _ -> compare x y
+         Allegra _ -> compare x y
+         Mary _ -> compare x y
+         Alonzo _ -> compare x y
+         Babbage _ -> compare x y
+         Conway _ -> compare x y
+      Nothing -> cmpIndex p q
+-}
+
+instance Eq (DCertF era) where
+  (DCertF (Shelley _) x) == (DCertF (Shelley _) y) = x == y
+  (DCertF (Allegra _) x) == (DCertF (Allegra _) y) = x == y
+  (DCertF (Mary _) x) == (DCertF (Mary _) y) = x == y
+  (DCertF (Alonzo _) x) == (DCertF (Alonzo _) y) = x == y
+  (DCertF (Babbage _) x) == (DCertF (Babbage _) y) = x == y
+  (DCertF (Conway _) x) == (DCertF (Conway _) y) = x == y
+
+-- =========
 data TxOutF era where
   TxOutF :: Proof era -> TxOut era -> TxOutF era
 
@@ -392,13 +402,17 @@ unValue (ValueF _ v) = v
 
 instance Ord (ValueF (ShelleyEra c)) where
   compare (ValueF _ coin1) (ValueF _ coin2) = compare coin1 coin2
-instance Eq (ValueF (ShelleyEra c)) where
-  x == y = compare x y == EQ
 
 instance Ord (ValueF (AllegraEra c)) where
   compare (ValueF _ coin1) (ValueF _ coin2) = compare coin1 coin2
-instance Eq (ValueF (AllegraEra c)) where
-  x == y = compare x y == EQ
+
+instance Eq (ValueF era) where
+  (ValueF (Shelley _) x) == (ValueF (Shelley _) y) = x == y
+  (ValueF (Allegra _) x) == (ValueF (Allegra _) y) = x == y
+  (ValueF (Mary _) x) == (ValueF (Mary _) y) = x == y
+  (ValueF (Alonzo _) x) == (ValueF (Alonzo _) y) = x == y
+  (ValueF (Babbage _) x) == (ValueF (Babbage _) y) = x == y
+  (ValueF (Conway _) x) == (ValueF (Conway _) y) = x == y
 
 -- ======
 data PParamsF era where

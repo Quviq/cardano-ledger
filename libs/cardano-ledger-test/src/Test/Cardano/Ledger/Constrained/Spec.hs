@@ -1827,7 +1827,7 @@ genSumsTo = do
   let v = Var testV
   rhs <- (Lit DeltaCoinR . DeltaCoin) <$> choose (-10, 10)
   lhs <- (Lit DeltaCoinR . DeltaCoin) <$> choose (-10, 10)
-  elements [SumsTo (DeltaCoin 1) v c [One rhs], SumsTo (DeltaCoin 1) lhs c [One rhs, One v]]
+  elements [SumsTo (Left (DeltaCoin 1)) v c [One rhs], SumsTo (Left (DeltaCoin 1)) lhs c [One rhs, One v]]
 
 solveSumsTo :: Pred era -> AddsSpec c
 solveSumsTo (SumsTo _ (Lit DeltaCoinR n) cond [One (Lit DeltaCoinR m), One (Var (V nam _ _))]) =

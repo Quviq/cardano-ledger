@@ -147,6 +147,7 @@ instance ReflectC C_Crypto where
 class
   ( EraGovernance era
   , EraTx era
+  , ShelleyEraDCert era
   , ReflectC (EraCrypto era)
   ) =>
   Reflect era

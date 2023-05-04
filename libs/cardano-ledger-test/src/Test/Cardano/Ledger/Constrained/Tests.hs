@@ -125,6 +125,7 @@ depthOfSum env = \case
   SumMap t -> depthOf env t
   SumList t -> depthOf env t
   One t -> depthOf env t
+  ProjOne _ _ t -> depthOf env t
   Project _ t -> depthOf env t
 
 genLiteral :: forall era t. Era era => GenEnv era -> Rep era t -> Gen t
@@ -420,7 +421,8 @@ genPredicate env =
             partSums <- partition (fromI [] small) ["sumdToC in Tests.hs"] count val
             (parts, env'') <- genParts partSums env'
             -- At some point we should generate a random TestCond other than EQL
-            pure (SumsTo (fromI [] small) sumTm EQL parts, markSolved (foldMap (varsOfSum mempty) parts) d env'')
+            pure (SumsTo (Left (fromI [] small)) sumTm EQL parts, markSolved (foldMap (varsOfSum mempty) parts) d env'')
+      -- FIXME Left means that sumTm is known. Not sure if that is what is needed here.
       | otherwise =
           oneof
             [ sumCKnownSets CoinR False
@@ -462,7 +464,8 @@ genPredicate env =
             (genFromOrdCond cmp canBeNegative tot)
             (VarTerm d)
         small <- genSmall @c
-        pure (SumsTo (fromI [] small) sumTm cmp parts, markSolved (vars sumTm) d env'')
+        pure (SumsTo (Right (fromI [] small)) sumTm cmp parts, markSolved (vars sumTm) d env'')
+    -- FIXME Right means that the parts are all known. Not sure if that is what is needed here.
 
     hasDomC =
       oneof
@@ -618,6 +621,7 @@ showEnv (Env vmap) = unlines $ map pr (Map.toList vmap)
     pr (name, Payload rep t _) = name ++ " :: " ++ show rep ++ " -> " ++ showVal rep t
 
 predConstr :: Pred era -> String
+predConstr MetaSize {} = "MetaSize"
 predConstr Sized {} = "Sized"
 predConstr (_ :=: _) = ":=:"
 predConstr (_ `Subset` _) = "Subset"
@@ -634,6 +638,7 @@ predConstr List {} = "List"
 predConstr Choose {} = "Choose"
 predConstr Maybe {} = "Maybe"
 predConstr GenFrom {} = "GenFrom"
+predConstr ForEach {} = "ForEach"
 
 constraintProperty :: Maybe Int -> Bool -> [String] -> OrderInfo -> ([Pred TestEra] -> DependGraph TestEra -> Env TestEra -> Property) -> Property
 constraintProperty timeout strict whitelist info prop =

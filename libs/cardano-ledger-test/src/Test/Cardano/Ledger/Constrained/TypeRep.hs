@@ -33,13 +33,15 @@ module Test.Cardano.Ledger.Constrained.TypeRep (
   Proof (..),
   Evidence (..),
   stringR,
+  hasOrd,
+  hasEq,
 )
 where
 
 import Cardano.Ledger.Address (Addr (..), RewardAcnt (..))
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (ExUnits, Tag)
-import Cardano.Ledger.Alonzo.Scripts.Data (Data (..))
+import Cardano.Ledger.Alonzo.Scripts.Data (Data (..), Datum (..), dataToBinaryData)
 import Cardano.Ledger.Alonzo.TxWits (RdmrPtr (..))
 import Cardano.Ledger.BaseTypes (EpochNo (..), Network (..), ProtVer (..), SlotNo (..))
 import Cardano.Ledger.Binary.Version (Version)
@@ -56,7 +58,8 @@ import Cardano.Ledger.PoolParams (PoolParams (ppId))
 import Cardano.Ledger.Pretty (ppInteger, ppRecord', ppString)
 import Cardano.Ledger.Pretty.Alonzo (ppRdmrPtr)
 import Cardano.Ledger.Pretty.Mary (ppValidityInterval)
-import Cardano.Ledger.Shelley.Delegation.Certificates (DCert (..))
+
+-- import Cardano.Ledger.Shelley.Delegation(DCert)
 import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.Shelley.Rewards (Reward (..))
 import Cardano.Ledger.TxIn (TxIn)
@@ -76,6 +79,7 @@ import Prettyprinter (hsep)
 import Test.Cardano.Ledger.Alonzo.Serialisation.Generators ()
 import Test.Cardano.Ledger.Babbage.Serialisation.Generators ()
 import Test.Cardano.Ledger.Constrained.Classes (
+  DCertF (..),
   PParamsF (..),
   PParamsUpdateF (..),
   ScriptF (..),
@@ -94,6 +98,7 @@ import Test.Cardano.Ledger.Constrained.Classes (
   unValue,
  )
 import Test.Cardano.Ledger.Constrained.Combinators (mapSized, setSized)
+import Test.Cardano.Ledger.Constrained.Monad (HasConstraint (With), Typed, explain, failT)
 import Test.Cardano.Ledger.Constrained.Size (Size (..))
 import Test.Cardano.Ledger.Core.Arbitrary ()
 import Test.Cardano.Ledger.Core.KeyPair (KeyPair (..))
@@ -106,6 +111,7 @@ import Test.Cardano.Ledger.Generic.PrettyCore (
   pcDCert,
   pcData,
   pcDataHash,
+  pcDatum,
   pcExUnits,
   pcFutureGenDeleg,
   pcGenDelegPair,
@@ -174,7 +180,7 @@ data Rep era t where
   PolicyIDR :: Rep era (PolicyID (EraCrypto era))
   WitnessesFieldR :: Proof era -> Rep era (WitnessesField era)
   AssetNameR :: Rep era AssetName
-  DCertR :: Rep era (DCert (EraCrypto era))
+  DCertR :: Proof era -> Rep era (DCertF era)
   RewardAcntR :: Rep era (RewardAcnt (EraCrypto era))
   ValidityIntervalR :: Rep era ValidityInterval
   KeyPairR :: Rep era (KeyPair 'Witness (EraCrypto era))
@@ -183,7 +189,8 @@ data Rep era t where
   ScriptHashR :: Rep era (ScriptHash (EraCrypto era))
   NetworkR :: Rep era Network
   RdmrPtrR :: Rep era RdmrPtr
-  DataR :: Proof era -> Rep era (Data era)
+  DataR :: Era era => Rep era (Data era)
+  DatumR :: Era era => Rep era (Datum era)
   ExUnitsR :: Rep era ExUnits
   TagR :: Rep era Tag
   DataHashR :: Rep era (DataHash (EraCrypto era))
@@ -220,6 +227,7 @@ instance Singleton (Rep e) where
   testEql WitHashR WitHashR = Just Refl
   testEql GenHashR GenHashR = Just Refl
   testEql GenDelegHashR GenDelegHashR = Just Refl
+  testEql VHashR VHashR = Just Refl
   testEql PoolParamsR PoolParamsR = Just Refl
   testEql NewEpochStateR NewEpochStateR = Just Refl
   testEql IntR IntR = Just Refl
@@ -263,7 +271,7 @@ instance Singleton (Rep e) where
   testEql MultiAssetR MultiAssetR = pure Refl
   testEql PolicyIDR PolicyIDR = pure Refl
   testEql AssetNameR AssetNameR = pure Refl
-  testEql DCertR DCertR = Just Refl
+  testEql (DCertR c) (DCertR d) = do Refl <- testEql c d; pure Refl
   testEql ValidityIntervalR ValidityIntervalR = Just Refl
   testEql RewardAcntR RewardAcntR = Just Refl
   testEql KeyPairR KeyPairR = Just Refl
@@ -273,7 +281,8 @@ instance Singleton (Rep e) where
   testEql ScriptHashR ScriptHashR = Just Refl
   testEql NetworkR NetworkR = Just Refl
   testEql RdmrPtrR RdmrPtrR = Just Refl
-  testEql (DataR c) (DataR d) = do Refl <- testEql c d; pure Refl
+  testEql DataR DataR = pure Refl
+  testEql DatumR DatumR = pure Refl
   testEql ExUnitsR ExUnitsR = Just Refl
   testEql TagR TagR = Just Refl
   testEql DataHashR DataHashR = Just Refl
@@ -304,16 +313,16 @@ instance Show (Rep era t) where
   show NaturalR = "Natural"
   show FloatR = "Float"
   show TxInR = "TxIn"
-  show (ValueR x) = "(Value " ++ show x ++ ")"
-  show (TxOutR x) = "(TxOut " ++ show x ++ ")"
-  show (UTxOR x) = "(UTxO " ++ show x ++ ")"
-  show (PParamsR x) = "(PParams " ++ show x ++ ")"
-  show (PParamsUpdateR x) = "(PParamsUpdate " ++ show x ++ ")"
+  show (ValueR x) = "(Value " ++ short x ++ ")"
+  show (TxOutR x) = "(TxOut " ++ short x ++ ")"
+  show (UTxOR x) = "(UTxO " ++ short x ++ ")"
+  show (PParamsR x) = "(PParams " ++ short x ++ ")"
+  show (PParamsUpdateR x) = "(PParamsUpdate " ++ short x ++ ")"
   show CharR = "Char"
   show DeltaCoinR = "DeltaCoin"
   show GenDelegPairR = "(GenDelegPair c)"
   show FutureGenDelegR = "(FutureGenDeleg c)"
-  show (PPUPStateR p) = "(ShelleyPPUPState " ++ show p ++ ")"
+  show (PPUPStateR p) = "(ShelleyPPUPState " ++ short p ++ ")"
   show PtrR = "Ptr"
   show IPoolStakeR = "(IndividualPoolStake c)"
   show SnapShotsR = "(SnapShots c)"
@@ -322,25 +331,26 @@ instance Show (Rep era t) where
   show RewardR = "(Reward c)"
   show (MaybeR x) = "(Maybe " ++ show x ++ ")"
   show NewEpochStateR = "NewEpochState"
-  show (ProtVerR x) = "(ProtVer " ++ show x ++ ")"
+  show (ProtVerR x) = "(ProtVer " ++ short x ++ ")"
   show SlotNoR = "(SlotNo c)"
   show SizeR = "Size"
-  show VCredR = "VCredR"
-  show VHashR = "VHashR"
+  show VCredR = "(Credential 'Voting c)"
+  show VHashR = "(KeyHash 'Voting c)"
   show MultiAssetR = "(MutiAsset c)"
   show PolicyIDR = "(PolicyID c)"
-  show (WitnessesFieldR p) = "(WitnessesField " ++ show p ++ ")"
+  show (WitnessesFieldR p) = "(WitnessesField " ++ short p ++ ")"
   show AssetNameR = "AssetName"
-  show DCertR = "(DCert c)"
+  show (DCertR p) = "(DCert " ++ short p ++ ")"
   show RewardAcntR = "(RewardAcnt c)"
   show ValidityIntervalR = "ValidityInterval"
   show KeyPairR = "(KeyPair 'Witness era)"
   show (GenR x) = "(Gen " ++ show x ++ ")"
-  show (ScriptR x) = "(Script " ++ show x ++ ")"
+  show (ScriptR x) = "(Script " ++ short x ++ ")"
   show ScriptHashR = "(ScriptHash c)"
   show NetworkR = "Network"
   show RdmrPtrR = "RdmrPtr"
-  show (DataR p) = "(Data " ++ show p ++ ")"
+  show DataR = "(Data era)"
+  show DatumR = "(Datum era)"
   show ExUnitsR = "ExUnits"
   show TagR = "Tag"
   show DataHashR = "(DataHash c)"
@@ -404,7 +414,7 @@ synopsis MultiAssetR (MultiAsset x) = "(MultiAsset num tokens = " ++ show (Map.s
 synopsis PolicyIDR (PolicyID x) = show (pcScriptHash x)
 synopsis (WitnessesFieldR p) x = show $ ppRecord' mempty $ unReflect pcWitnessesField p x
 synopsis AssetNameR (AssetName x) = take 10 (show x)
-synopsis DCertR x = show (pcDCert x)
+synopsis (DCertR p) (DCertF _ x) = show (pcDCert p x)
 synopsis RewardAcntR x = show (pcRewardAcnt x)
 synopsis ValidityIntervalR x = show (ppValidityInterval x)
 synopsis KeyPairR _ = "(KeyPairR ...)"
@@ -413,13 +423,8 @@ synopsis (ScriptR _) x = show x -- The Show instance uses pcScript
 synopsis ScriptHashR x = show (pcScriptHash x)
 synopsis NetworkR x = show x
 synopsis RdmrPtrR x = show (ppRdmrPtr x)
-synopsis (DataR p) x = case p of
-  Shelley _ -> show (pcData x)
-  Allegra _ -> show (pcData x)
-  Mary _ -> show (pcData x)
-  Alonzo _ -> show (pcData x)
-  Babbage _ -> show (pcData x)
-  Conway _ -> show (pcData x)
+synopsis DataR x = show (pcData x)
+synopsis DatumR x = show (pcDatum x)
 synopsis ExUnitsR x = show (pcExUnits x)
 synopsis TagR x = show x
 synopsis DataHashR x = show (pcDataHash x)
@@ -499,7 +504,7 @@ instance Shaped (Rep era) any where
   shape PolicyIDR = Nullary 42
   shape (WitnessesFieldR p) = Nary 43 [shape p]
   shape AssetNameR = Nullary 44
-  shape DCertR = Nullary 45
+  shape (DCertR p) = Nary 45 [shape p]
   shape RewardAcntR = Nullary 46
   shape ValidityIntervalR = Nullary 47
   shape KeyPairR = Nullary 48
@@ -508,12 +513,13 @@ instance Shaped (Rep era) any where
   shape ScriptHashR = Nullary 51
   shape NetworkR = Nullary 52
   shape RdmrPtrR = Nullary 53
-  shape (DataR p) = Nary 54 [shape p]
-  shape ExUnitsR = Nullary 55
-  shape TagR = Nullary 56
-  shape DataHashR = Nullary 57
-  shape AddrR = Nullary 58
-  shape PCredR = Nullary 59
+  shape DataR = Nullary 54
+  shape DatumR = Nullary 55
+  shape ExUnitsR = Nullary 56
+  shape TagR = Nullary 57
+  shape DataHashR = Nullary 58
+  shape AddrR = Nullary 59
+  shape PCredR = Nullary 60
 
 compareRep :: forall era t s. Rep era t -> Rep era s -> Ordering
 compareRep x y = cmpIndex @(Rep era) x y
@@ -575,7 +581,12 @@ genSizedRep _ PolicyIDR = arbitrary
 genSizedRep _ (WitnessesFieldR _) = pure $ AddrWits Set.empty
 genSizedRep _ AssetNameR = arbitrary
 genSizedRep _ RewardAcntR = arbitrary
-genSizedRep _ DCertR = arbitrary
+genSizedRep _ (DCertR (Shelley c)) = DCertF (Shelley c) <$> arbitrary
+genSizedRep _ (DCertR (Allegra c)) = DCertF (Allegra c) <$> arbitrary
+genSizedRep _ (DCertR (Mary c)) = DCertF (Mary c) <$> arbitrary
+genSizedRep _ (DCertR (Alonzo c)) = DCertF (Alonzo c) <$> arbitrary
+genSizedRep _ (DCertR (Babbage c)) = DCertF (Babbage c) <$> arbitrary
+genSizedRep _ (DCertR (Conway c)) = DCertF (Conway c) <$> arbitrary
 genSizedRep _ ValidityIntervalR = arbitrary
 genSizedRep _ KeyPairR = arbitrary
 genSizedRep n (GenR x) = pure (genSizedRep n x)
@@ -583,7 +594,13 @@ genSizedRep _ (ScriptR p) = genScriptF p
 genSizedRep _ ScriptHashR = arbitrary
 genSizedRep _ NetworkR = arbitrary
 genSizedRep n RdmrPtrR = RdmrPtr <$> arbitrary <*> choose (0, fromIntegral n)
-genSizedRep _ (DataR _) = arbitrary
+genSizedRep _ DataR = arbitrary
+genSizedRep n DatumR =
+  oneof
+    [ pure NoDatum
+    , DatumHash <$> genSizedRep @era n DataHashR
+    , Datum . dataToBinaryData <$> genSizedRep @era n DataR
+    ]
 genSizedRep _ ExUnitsR = arbitrary
 genSizedRep _ TagR = arbitrary
 genSizedRep _ DataHashR = arbitrary
@@ -663,7 +680,12 @@ shrinkRep MultiAssetR t = shrink t
 shrinkRep PolicyIDR t = shrink t
 shrinkRep (WitnessesFieldR _) _ = []
 shrinkRep AssetNameR t = shrink t
-shrinkRep DCertR t = shrink t
+shrinkRep (DCertR (Shelley _)) (DCertF p x) = map (DCertF p) (shrink x)
+shrinkRep (DCertR (Allegra _)) (DCertF p x) = map (DCertF p) (shrink x)
+shrinkRep (DCertR (Mary _)) (DCertF p x) = map (DCertF p) (shrink x)
+shrinkRep (DCertR (Alonzo _)) (DCertF p x) = map (DCertF p) (shrink x)
+shrinkRep (DCertR (Babbage _)) (DCertF p x) = map (DCertF p) (shrink x)
+shrinkRep (DCertR (Conway _)) (DCertF p x) = map (DCertF p) (shrink x)
 shrinkRep RewardAcntR t = shrink t
 shrinkRep ValidityIntervalR _ = []
 shrinkRep KeyPairR t = shrink t
@@ -674,7 +696,8 @@ shrinkRep VCredR t = shrink t
 shrinkRep VHashR t = shrink t
 shrinkRep NetworkR t = shrink t
 shrinkRep RdmrPtrR t = shrink t
-shrinkRep (DataR _) _ = []
+shrinkRep DataR t = shrink t
+shrinkRep DatumR _ = []
 shrinkRep ExUnitsR t = shrink t
 shrinkRep TagR t = shrink t
 shrinkRep DataHashR t = shrink t
@@ -682,6 +705,14 @@ shrinkRep AddrR t = shrink t
 shrinkRep PCredR t = shrink t
 
 -- ===========================
+
+short :: Proof era -> String
+short (Shelley _) = "Shelley"
+short (Allegra _) = "Allegra"
+short (Mary _) = "Mary"
+short (Alonzo _) = "Alonzo"
+short (Babbage _) = "Babbage"
+short (Conway _) = "Conway"
 
 {-
 synopsisPParam :: forall era. Proof era -> Core.PParams era -> String
@@ -699,3 +730,90 @@ synopsisPParam p x = withEraPParams p help
         ++ (synopsis (ProtVerR p) (x ^. Core.ppProtocolVersionL))
         ++ "}"
 -}
+
+hasOrd :: Rep era t -> s t -> Typed (HasConstraint Ord (s t))
+hasOrd rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
+  where
+    err t c = error ("hasOrd function 'help' evaluates its second arg at type " ++ show t ++ ", in " ++ c ++ " case.")
+    help :: Rep era t -> s t -> Typed (HasConstraint Ord (s t))
+    help CoinR t = pure $ With t
+    help r@(_ :-> _) _ = failT [show r ++ " does not have an Ord instance."]
+    help r@(MapR _ b) m = do
+      With _ <- help b (err b (show r))
+      pure (With m)
+    help (SetR _) s = pure $ With s
+    help r@(ListR a) l = do
+      With _ <- help a (err a (show r))
+      pure $ With l
+    help CredR c = pure $ With c
+    help PoolHashR p = pure $ With p
+    help GenHashR p = pure $ With p
+    help GenDelegHashR p = pure $ With p
+    help WitHashR p = pure $ With p
+    help PoolParamsR pp = pure $ With pp
+    help EpochR e = pure $ With e
+    help RationalR r = pure $ With r
+    help Word64R w = pure $ With w
+    help IntR i = pure $ With i
+    help NaturalR i = pure $ With i
+    help FloatR i = pure $ With i
+    help TxInR t = pure $ With t
+    help CharR s = pure $ With s
+    help (ValueR (Shelley _)) v = pure $ With v
+    help (ValueR (Allegra _)) v = pure $ With v
+    help UnitR v = pure $ With v
+    help (PairR a b) p = do
+      With _ <- help a undefined
+      With _ <- help b undefined
+      pure $ With p
+    help (ValueR _) _ = failT ["Value does not have Ord instance in post Allegra eras"]
+    help (TxOutR _) _ = failT ["TxOut does not have Ord instance"]
+    help (UTxOR _) _ = failT ["UTxO does not have Ord instance"]
+    help DeltaCoinR v = pure $ With v
+    help GenDelegPairR v = pure $ With v
+    help FutureGenDelegR v = pure $ With v
+    help (PPUPStateR _) _ = failT ["PPUPState does not have Ord instance"]
+    help PtrR v = pure $ With v
+    help SnapShotsR _ = failT ["SnapShot does not have Ord instance"]
+    help IPoolStakeR _ = failT ["IndividualPoolStake does not have Ord instance"]
+    help (PParamsR _) _ = failT ["PParams does not have Ord instance"]
+    help (PParamsUpdateR _) _ = failT ["PParamsUpdate does not have Ord instance"]
+    help RewardR v = pure $ With v
+    help r@(MaybeR a) l = do
+      With _ <- help a (err a (show r))
+      pure $ With l
+    help NewEpochStateR _ = failT ["NewEpochStateR does not have Ord instance"]
+    help (ProtVerR _) v = pure $ With v
+    help SlotNoR v = pure $ With v
+    help SizeR v = pure $ With v
+    help VCredR v = pure $ With v
+    help VHashR v = pure $ With v
+    help MultiAssetR _ = failT ["MultiAsset does not have Ord instance"]
+    help PolicyIDR v = pure $ With v
+    help (WitnessesFieldR _) _ = failT ["WitnessesField does not have Ord instance"]
+    help AssetNameR v = pure $ With v
+    help (DCertR _) _ = failT ["DCert does not have Ord instance"]
+    help RewardAcntR v = pure $ With v
+    help ValidityIntervalR v = pure $ With v
+    help KeyPairR _ = failT ["KeyPair does not have Ord instance"]
+    help (GenR _) _ = failT ["Gen does not have Ord instance"]
+    help (ScriptR _) _ = failT ["Script does not have Ord instance"]
+    help ScriptHashR v = pure $ With v
+    help NetworkR v = pure $ With v
+    help TagR v = pure $ With v
+    help ExUnitsR _ = failT ["ExUnits does not have Ord instance"]
+    help RdmrPtrR v = pure $ With v
+    help DataR _ = failT ["Data does not have Ord instance"]
+    help DatumR v = pure $ With v
+    help DataHashR v = pure $ With v
+    help AddrR v = pure $ With v
+    help PCredR v = pure $ With v
+
+hasEq :: Rep era t -> s t -> Typed (HasConstraint Eq (s t))
+hasEq rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
+  where
+    help :: Rep era t -> s t -> Typed (HasConstraint Eq (s t))
+    help (TxOutR _) v = pure $ With v
+    help x v = do
+      With y <- hasOrd x v
+      pure (With y)

@@ -13,13 +13,54 @@ import Test.Cardano.Ledger.Constrained.Lenses (fGenDelegGenKeyHashL)
 import Test.Cardano.Ledger.Constrained.Monad (monadTyped)
 import Test.Cardano.Ledger.Constrained.Preds.Universes
 import Test.Cardano.Ledger.Constrained.Rewrite (standardOrderInfo)
-import Test.Cardano.Ledger.Constrained.Size (OrdCond (..), Size (..))
+import Test.Cardano.Ledger.Constrained.Size (OrdCond (..))
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
-import Test.Cardano.Ledger.Generic.PrettyCore (pcDState, pcIndividualPoolStake, pcKeyHash, pcPState)
+import Test.Cardano.Ledger.Generic.PrettyCore (
+  PrettyC (..),
+  pcDState,
+  pcIndividualPoolStake,
+  pcKeyHash,
+  pcPState,
+  pcVState,
+ )
 import Test.Cardano.Ledger.Generic.Proof
 import Test.QuickCheck
+
+-- ======================================
+
+vstatePreds :: Proof era -> [Pred era]
+vstatePreds _p =
+  [ Sized (Range 3 8) dreps
+  , Sized (Range 5 7) (Dom ccHotKeys)
+  , Subset dreps voteUniv
+  , Subset (Dom ccHotKeys) voteHashUniv
+  ]
+
+vstateStage ::
+  Reflect era =>
+  Proof era ->
+  Subst era ->
+  Gen (Subst era)
+vstateStage proof = toolChainSub proof standardOrderInfo (vstatePreds proof)
+
+mainV :: IO ()
+mainV = do
+  let proof = Babbage Standard
+  env <-
+    generate
+      ( pure []
+          >>= universeStage proof
+          >>= vstateStage proof
+          >>= (\subst -> monadTyped $ substToEnv subst emptyEnv)
+      )
+  vstate <- monadTyped $ runTarget env vstateT
+  putStrLn (show (pcVState vstate))
+  putStrLn "\n"
+  putStrLn (unlines (otherFromEnv [] env))
+
+-- ==========================================
 
 pstateNames :: [String]
 pstateNames =
@@ -35,15 +76,16 @@ pstatePreds _p =
   -- These Sized constraints are needd to be ensure that regPools is bigger than retiring
   , Sized (ExactSize 3) retiring
   , Sized (AtLeast 3) regPools
-  , Subset (Dom regPools) poolsUniv
-  , Subset (Dom futureRegPools) poolsUniv
-  , Subset (Dom poolDeposits) poolsUniv
+  , Subset (Dom regPools) poolHashUniv
+  , Subset (Dom futureRegPools) poolHashUniv
+  , Subset (Dom poolDeposits) poolHashUniv
   , Subset (Dom retiring) (Dom regPools) -- Note regPools must be bigger than retiring
   , Dom regPools :=: Dom poolDeposits
+  , NotMember (Lit CoinR (Coin 0)) (Rng poolDeposits)
   , Disjoint (Dom regPools) (Dom futureRegPools)
   , epochs :=: Elems retiring
   , Choose
-      (SzExact 3)
+      (ExactSize 3)
       epochs
       [ (Constr "id" id ^$ e, [CanFollow e epochNo])
       , (Constr "(+1)" (+ 1) ^$ e, [CanFollow e epochNo])
@@ -55,7 +97,7 @@ pstatePreds _p =
     -- Alternately we could put this in NewEpochState, and insist that pStateStage
     -- preceed newEpochStateStage
     Dom regPools :=: Dom poolDistr
-  , SumsTo (1 % 1000) (Lit RationalR 1) EQL [Project RationalR poolDistr]
+  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [Project RationalR poolDistr]
   ]
   where
     e = var "e" EpochR
@@ -68,8 +110,8 @@ pstateStage ::
   Gen (Subst era)
 pstateStage proof = toolChainSub proof standardOrderInfo (pstatePreds proof)
 
-main :: IO ()
-main = do
+mainP :: IO ()
+mainP = do
   let proof = Babbage Standard
   env <-
     generate
@@ -90,19 +132,23 @@ main = do
 
 dstatePreds :: Proof era -> [Pred era]
 dstatePreds _p =
-  [ Sized (AtMost 8) rewards -- Small enough that it leaves some slack with credUniv (size about 30)
+  [ Sized (Range 1 8) rewards -- Small enough that it leaves some slack with credUniv (size about 30),
+  -- but it also cannot be empty
   , Sized (AtLeast 1) treasury --  If these have size zero, the SumsTo can't be solved
   , Sized (AtLeast 1) instanReserves
   , Random instanTreasury
+  , Dom rewards :⊆: credsUniv
+  , Member (Lit CoinR (Coin 0)) (Rng rewards) -- At least 1 cred has zero rewards
+  , NotMember (Lit CoinR (Coin 0)) (Rng stakeDeposits)
   , Dom rewards :=: Dom stakeDeposits
   , Dom delegations :⊆: Dom rewards
   , Dom rewards :=: Rng ptrs
-  , Dom genDelegs :⊆: Dom genesisUniv
+  , Dom genDelegs :⊆: Dom genesisHashUniv
   , Negate (deltaReserves) :=: deltaTreasury
-  , SumsTo (Coin 1) instanReservesSum EQL [SumMap instanReserves]
-  , SumsTo (DeltaCoin 1) (Delta instanReservesSum) LTH [One (Delta reserves), One deltaReserves]
-  , SumsTo (Coin 1) instanTreasurySum EQL [SumMap instanTreasury]
-  , SumsTo (DeltaCoin 1) (Delta instanTreasurySum) LTH [One (Delta treasury), One deltaTreasury]
+  , SumsTo (Right (Coin 1)) instanReservesSum EQL [SumMap instanReserves]
+  , SumsTo (Right (DeltaCoin 1)) (Delta instanReservesSum) LTH [One (Delta reserves), One deltaReserves]
+  , SumsTo (Right (Coin 1)) instanTreasurySum EQL [SumMap instanTreasury]
+  , SumsTo (Right (DeltaCoin 1)) (Delta instanTreasurySum) LTH [One (Delta treasury), One deltaTreasury]
   , ProjS fGenDelegGenKeyHashL GenHashR (Dom futureGenDelegs) :=: Dom genDelegs
   ]
   where
@@ -128,5 +174,24 @@ mainD = do
       )
   dState <- monadTyped $ runTarget env dstateT
   putStrLn (show (pcDState dState))
+  putStrLn "\n"
+  putStrLn (unlines (otherFromEnv [] env))
+
+-- ===============================================
+
+mainC :: IO ()
+mainC = do
+  let proof = Babbage Standard
+  env <-
+    generate
+      ( pure []
+          >>= universeStage proof
+          >>= vstateStage proof
+          >>= pstateStage proof
+          >>= dstateStage proof
+          >>= (\subst -> monadTyped $ substToEnv subst emptyEnv)
+      )
+  certState <- monadTyped $ runTarget env dpstateT
+  putStrLn (show (prettyC proof certState))
   putStrLn "\n"
   putStrLn (unlines (otherFromEnv [] env))
