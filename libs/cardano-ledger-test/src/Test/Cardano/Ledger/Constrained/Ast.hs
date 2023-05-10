@@ -30,7 +30,6 @@ import Test.Cardano.Ledger.Constrained.Classes (
   Count (..),
   ScriptF (..),
   Sizeable (..),
-  Sums (..),
  )
 import Test.Cardano.Ledger.Constrained.Env (
   Access (..),
@@ -47,7 +46,7 @@ import Test.Cardano.Ledger.Constrained.Monad (HasConstraint (With), Typed (..), 
 import Test.Cardano.Ledger.Constrained.Size (OrdCond (..), Size (..), runOrdCond, runSize, seps)
 import Test.Cardano.Ledger.Constrained.TypeRep (Rep (..), hasEq, synopsis, testEql, (:~:) (Refl))
 import Test.Cardano.Ledger.Generic.Proof (Reflect)
-import Test.QuickCheck (Gen)
+import Test.QuickCheck (Gen, oneof)
 
 -- =========================================================
 -- class FromList cannot be defined in Classes.hs because
@@ -138,7 +137,7 @@ data Sum era c where
   SumList :: Adds c => Term era [c] -> Sum era c
   One :: Term era c -> Sum era c
   ProjOne :: forall x c era. Lens' x c -> Rep era c -> Term era x -> Sum era c
-  Project :: forall x c a era. Sums x c => Rep era c -> Term era (Map a x) -> Sum era c -- TODO uses lenses here
+  ProjMap :: forall x c a era. Adds c => Rep era c -> Lens' x c -> Term era (Map a x) -> Sum era c
 
 -- ====================================================================
 -- Special patterns for building literal Terms of type Size and Word64
@@ -214,6 +213,25 @@ infixl 0 ^$
 constTarget :: t -> Target era t
 constTarget t = Constr "constTarget" (const t) ^$ (Lit UnitR ())
 
+emptyTarget :: Target era ()
+emptyTarget = (Simple (Lit UnitR ()))
+
+justTarget :: Term era t -> Target era (Maybe t)
+justTarget x = Constr "Just" Just ^$ x
+
+idTarget :: Term era t -> Target era t
+idTarget x = Constr "id" id ^$ x
+
+-- | Usefull when using the Pred 'FromGen'
+--   E.g. (FromGen termMaybeT (maybeTarget ^$ termT))
+maybeTarget :: Target era (t -> Gen (Maybe t))
+maybeTarget = Constr "maybeTarget" genMaybe
+  where
+    genMaybe x = oneof [pure Nothing, pure (Just x)]
+
+listToSetTarget :: Ord x => Term era [x] -> Target era (Set.Set x)
+listToSetTarget x = Constr "FromList" Set.fromList ^$ x
+
 -- ===================================
 
 showL :: (t -> String) -> [Char] -> [t] -> [Char]
@@ -242,7 +260,7 @@ instance Show (Sum era c) where
   show (SumList t) = "sum " ++ show t
   show (One t) = show t
   show (ProjOne _ c t) = seps ["ProjOne", show c, show t]
-  show (Project crep t) = "Project " ++ show crep ++ " " ++ show t
+  show (ProjMap crep _lens t) = "ProjMap " ++ show crep ++ " " ++ show t
 
 instance Show (Pred era) where
   show (MetaSize n t) = "MetaSize " ++ show n ++ " " ++ show t
@@ -405,7 +423,7 @@ varsOfSum ans (SumMap y) = varsOfTerm ans y
 varsOfSum ans (SumList y) = varsOfTerm ans y
 varsOfSum ans (One y) = varsOfTerm ans y
 varsOfSum ans (ProjOne _ _ y) = varsOfTerm ans y
-varsOfSum ans (Project _ x) = varsOfTerm ans x
+varsOfSum ans (ProjMap _ _ x) = varsOfTerm ans x
 
 -- =====================================================
 -- Subtitution of (V era t) inside of (Spec era t)
@@ -540,7 +558,7 @@ substSum sub (SumMap x) = SumMap (substTerm sub x)
 substSum sub (SumList x) = SumList (substTerm sub x)
 substSum sub (One x) = One (substTerm sub x)
 substSum sub (ProjOne l r x) = ProjOne l r (substTerm sub x)
-substSum sub (Project crep x) = Project crep (substTerm sub x)
+substSum sub (ProjMap crep l x) = ProjMap crep l (substTerm sub x)
 
 substTarget :: Subst era -> Target era t -> Target era t
 substTarget sub (Simple e) = Simple (substTerm sub e)
@@ -590,7 +608,7 @@ simplifySum (One (Negate (Lit DeltaCoinR (DeltaCoin n)))) = pure (DeltaCoin (-n)
 simplifySum (ProjOne l _ (Lit _ x)) = pure (x ^. l)
 simplifySum (SumMap (Lit _ m)) = pure (Map.foldl' add zero m)
 simplifySum (SumList (Lit _ m)) = pure (List.foldl' add zero m)
-simplifySum (Project _ (Lit _ m)) = pure (List.foldl' (\ans x -> add ans (getSum x)) zero m)
+simplifySum (ProjMap _ l (Lit _ m)) = pure (List.foldl' (\ans x -> add ans (x ^. l)) zero m)
 simplifySum x = failT ["Can't simplify Sum: " ++ show x ++ ", to a value."]
 
 simplifyTarget :: Target era t -> Typed t
@@ -776,9 +794,9 @@ runSum env (One t) = runTerm env t
 runSum env (ProjOne l _ t) = do
   x <- runTerm env t
   pure (x ^. l)
-runSum env (Project _ t) = Map.foldl' accum zero <$> runTerm env t
+runSum env (ProjMap _ l t) = Map.foldl' accum zero <$> runTerm env t
   where
-    accum ans x = add ans (getSum x)
+    accum ans x = add ans (x ^. l)
 
 makeTest :: Env era -> Pred era -> Typed (String, Bool, Pred era)
 makeTest env c = do
@@ -806,6 +824,10 @@ data Pat era t where
 data Arg era t where
   ArgPs :: !(Field era t s) -> ![Pat era s] -> Arg era t
   Arg :: !(Field era t s) -> Arg era t
+
+-- | Succeds if 'term' is a variable with an embedded (Lens' t2 t1)
+patt :: Rep era t1 -> Term era t2 -> Pat era t1
+patt rep term = Pat rep [arg rep term]
 
 instance Show (Pat era t) where
   show (Pat r xs) = "Pat " ++ show r ++ " " ++ showL show ", " xs

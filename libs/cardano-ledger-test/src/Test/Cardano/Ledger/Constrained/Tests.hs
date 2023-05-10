@@ -126,7 +126,7 @@ depthOfSum env = \case
   SumList t -> depthOf env t
   One t -> depthOf env t
   ProjOne _ _ t -> depthOf env t
-  Project _ t -> depthOf env t
+  ProjMap _ _ t -> depthOf env t
 
 genLiteral :: forall era t. Era era => GenEnv era -> Rep era t -> Gen t
 genLiteral env rep =

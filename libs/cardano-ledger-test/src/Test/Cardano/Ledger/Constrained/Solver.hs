@@ -30,7 +30,6 @@ import Test.Cardano.Ledger.Constrained.Classes (
   Count (..),
   ScriptF (..),
   Sizeable (getSize),
-  Sums (..),
  )
 import Test.Cardano.Ledger.Constrained.Combinators (errorMess, genFromMap, itemFromSet, suchThatErr)
 import Test.Cardano.Ledger.Constrained.Env
@@ -155,7 +154,7 @@ simplifyList r1 term = do
 -- | Is the Sum a variable (of a map). Only SumMap and Project store maps.
 isMapVar :: Name era -> Sum era c -> Bool
 isMapVar n1 (SumMap (Var v2)) = n1 == Name v2
-isMapVar n1 (Project _ (Var v2)) = n1 == Name v2
+isMapVar n1 (ProjMap _ _ (Var v2)) = n1 == Name v2
 isMapVar _ _ = False
 
 exactlyOne :: (a -> Bool) -> [a] -> Bool
@@ -352,9 +351,9 @@ solveMapSummands ::
   Int ->
   [Sum era c] ->
   Typed (RngSpec era rng)
-solveMapSummands small lhsC _ cond (V _ (MapR _ r) _) c [Project crep (Var (V name (MapR _ r1) _))] = do
+solveMapSummands small lhsC _ cond (V _ (MapR _ r) _) c [ProjMap _crep l (Var (V name (MapR _ r1) _))] = do
   Refl <- sameRep r r1
-  pure (RngProj small crep (vRightSize (toI lhsC) cond c name))
+  pure (RngProj small r l (vRightSize (toI lhsC) cond c name))
 solveMapSummands small lhsC _ cond (V _ (MapR _ r) _) c [SumMap (Var (V name (MapR _ r1) _))] = do
   Refl <- sameRep r r1
   pure (RngSum small (vRightSize (toI lhsC) cond c name))
@@ -525,7 +524,7 @@ summandAsInt (One (Negate (Lit DeltaCoinR (DeltaCoin n)))) = pure (toI ((DeltaCo
 summandAsInt (ProjOne l CoinR (Lit _ x)) = pure (toI (x ^. l))
 summandAsInt (SumMap (Lit _ m)) = pure (toI (Map.foldl' add zero m))
 summandAsInt (SumList (Lit _ m)) = pure (toI (List.foldl' add zero m))
-summandAsInt (Project _ (Lit _ m)) = pure (toI (List.foldl' (\ans x -> add ans (getSum x)) zero m))
+summandAsInt (ProjMap _ l (Lit _ m)) = pure (toI (List.foldl' (\ans x -> add ans (x ^. l)) zero m))
 summandAsInt x = failT ["Can't compute summandAsInt: " ++ show x ++ ", to an Int."]
 
 genSum :: Adds x => Sum era x -> Rep era x -> x -> Subst era -> Gen (Subst era)

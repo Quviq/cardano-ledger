@@ -20,6 +20,7 @@ import Data.Maybe.Strict (StrictMaybe (..), maybeToStrictMaybe, strictMaybeToMay
 import Lens.Micro
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Classes
+import Test.Cardano.Ledger.Constrained.Combinators (genFromMap, itemFromSet)
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Monad (monadTyped)
 import Test.Cardano.Ledger.Constrained.Preds.Universes
@@ -33,6 +34,22 @@ import Test.Cardano.Ledger.Generic.PrettyCore (pcData, pcDataHash, pcScript, pcS
 import Test.Cardano.Ledger.Generic.Proof
 import Test.Cardano.Ledger.Generic.Updaters (newTxBody, newTxOut)
 import Test.QuickCheck
+
+-- import Test.Cardano.Ledger.Mary.Arbitrary(hashOfDigitByteStrings)
+
+import Cardano.Crypto.Hash.Class (Hash, HashAlgorithm, castHash, hashWith)
+import Cardano.Ledger.Hashes (ScriptHash (..))
+import Cardano.Ledger.Mary.Value (
+  AssetName (..),
+  MaryValue (..),
+  MultiAsset (..),
+  PolicyID (..),
+  multiAssetFromList,
+ )
+import Data.Int (Int64)
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.String (IsString (..))
 
 -- =========================================================================
 
@@ -77,19 +94,6 @@ txoutDataHashF =
 txoutDataHash :: (Reflect era, AlonzoEraTxOut era) => Term era (Maybe (DataHash (EraCrypto era)))
 txoutDataHash = fieldToTerm txoutDataHashF
 
-data TxOutWit era where
-  ShelleyToMary :: EraTxOut era => TxOutWit era
-  AlonzoToAlonzo :: AlonzoEraTxOut era => TxOutWit era
-  BabbageToConway :: BabbageEraTxOut era => TxOutWit era
-
-whichTxOut :: Proof era -> TxOutWit era
-whichTxOut (Shelley _) = ShelleyToMary
-whichTxOut (Allegra _) = ShelleyToMary
-whichTxOut (Mary _) = ShelleyToMary
-whichTxOut (Alonzo _) = AlonzoToAlonzo
-whichTxOut (Babbage _) = BabbageToConway
-whichTxOut (Conway _) = BabbageToConway
-
 -- ==============================================
 
 outNames :: [String]
@@ -112,8 +116,8 @@ txOutFromEnv proof env = unReflect newTxOut proof (concat (map (lookupTxOut env)
 
 -- ================================================================================
 
-txOutPreds :: (Reflect era) => Proof era -> Term era Coin -> [Pred era]
-txOutPreds p balanceCoin =
+txOutPreds :: (Reflect era) => Proof era -> Term era Coin -> Term era [TxOutF era] -> [Pred era]
+txOutPreds p balanceCoin outputS =
   [ Choose
       (Range 6 6)
       datums
@@ -121,30 +125,31 @@ txOutPreds p balanceCoin =
       , (Constr "DatumHash" DatumHash ^$ hash, [Member hash (Dom dataUniv)])
       , (Constr "Datum" (Datum . dataToBinaryData) ^$ dat, [Member (HashD dat) (Dom dataUniv)])
       ]
-  , datumsSet :<-: listToSetT datums
+  , datumsSet :<-: listToSetTarget datums
   , case whichTxOut p of
-      ShelleyToMary ->
+      TxOutShelleyToMary ->
         ForEach
           (Range 5 5)
-          (outputs p)
+          outputS
           ( Pat
               outR
               [ Arg txoutAddressF
-              , argP outR txoutAmount [Pat valueR [Arg valCoinF]]
+              , ArgPs txoutAmountF [Pat (ValueR p) [Arg valCoinF], Pat (ValueR p) [Arg valueFMultiAssetF]]
               ]
           )
           [ Member txoutAddress addrUniv
-          , Component (Right txoutAmount) [field (ValueR p) valCoin]
+          , Component (Right txoutAmount) [field (ValueR p) valCoin, field (ValueR p) valueFMultiAsset]
           , SumsTo (Left (Coin 1)) balanceCoin EQL [One valCoin]
+          , GenFrom valueFMultiAsset (Constr "multiAsset" multiAsset ^$ (scriptUniv p))
           ]
-      AlonzoToAlonzo ->
+      TxOutAlonzoToAlonzo ->
         ForEach
           (Range 5 5)
-          (outputs p)
-          ( Pat
-              outR
+          outputS
+          ( Pat -- analog to Haskell pattern (TxOut{txoutAddress, txoutAmount{valCoin}, txoutDataHash})
+              (TxOutR p)
               [ Arg txoutAddressF
-              , argP outR txoutAmount [Pat valueR [Arg valCoinF]]
+              , ArgPs txoutAmountF [Pat valueR [Arg valCoinF], Pat (ValueR p) [Arg valueFMultiAssetF]]
               , Arg txoutDataHashF
               ]
           )
@@ -152,15 +157,16 @@ txOutPreds p balanceCoin =
           , Component (Right txoutAmount) [field (ValueR p) valCoin]
           , Maybe txoutDataHash (Simple hash) [Member hash (Dom dataUniv)]
           , SumsTo (Left (Coin 1)) balanceCoin EQL [One valCoin]
+          , GenFrom valueFMultiAsset (Constr "multiAsset" multiAsset ^$ (scriptUniv p))
           ]
-      BabbageToConway ->
+      TxOutBabbageToConway ->
         ForEach
           (Range 5 5)
-          (outputs p)
+          outputS
           ( Pat
-              outR
+              (TxOutR p)
               [ Arg txoutAddressF
-              , argP outR txoutAmount [Pat valueR [Arg valCoinF]]
+              , argP outR txoutAmount [Pat (ValueR p) [Arg valCoinF], Pat (ValueR p) [Arg valueFMultiAssetF]]
               , Arg txoutScriptF
               , Arg txoutDatumF
               ]
@@ -170,6 +176,7 @@ txOutPreds p balanceCoin =
           , Maybe txoutScript (Simple script) [Member (HashS script) (Dom (spendscriptUniv p))]
           , Member txoutDatum datumsSet
           , SumsTo (Left (Coin 2)) balanceCoin EQL [One valCoin]
+          , GenFrom valueFMultiAsset (Constr "multiAsset" multiAsset ^$ (scriptUniv p))
           ]
   ]
   where
@@ -184,12 +191,12 @@ txOutPreds p balanceCoin =
 main :: IO ()
 main = do
   let proof = Babbage Standard
-  -- rewritten <- snd <$> generate (rewriteGen (1,(txOutPreds proof (Lit CoinR (Coin 100)))))
+  -- rewritten <- snd <$> generate (rewriteGen (1,(txOutPreds proof (Lit CoinR (Coin 100)) (outputs proof))))
   env <-
     generate
       ( pure []
           >>= universeStage proof
-          >>= toolChain proof standardOrderInfo (txOutPreds proof (Lit CoinR (Coin 100)))
+          >>= toolChain proof standardOrderInfo (txOutPreds proof (Lit CoinR (Coin 100)) (outputs proof))
       )
   -- putStrLn (show rewritten)
   -- putStrLn ""

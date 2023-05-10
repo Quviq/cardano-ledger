@@ -44,7 +44,7 @@ import Test.Cardano.Ledger.Constrained.Scripts (genCoreScript)
 import Test.Cardano.Ledger.Constrained.Size (AddsSpec (..), Size (..), genFromIntRange, genFromNonNegIntRange)
 import Test.Cardano.Ledger.Conway.Arbitrary ()
 import Test.Cardano.Ledger.Core.Arbitrary ()
-import Test.Cardano.Ledger.Generic.PrettyCore (pcDCert, pcScript, pcTxOut, pcVal)
+import Test.Cardano.Ledger.Generic.PrettyCore (pcScript, pcTxCert, pcTxOut, pcVal)
 import Test.Cardano.Ledger.Generic.Proof (
   AllegraEra,
   GoodCrypto,
@@ -122,7 +122,12 @@ sumAdds xs = List.foldl' add zero xs
 projAdds :: (Foldable t, Sums a b) => t a -> b
 projAdds xs = List.foldl' accum zero xs
   where
-    accum ans x = add ans (getSum x)
+    accum ans x = add ans (getSum x) -- TODO: Remove after removing Sums constraint over ElemSpec
+
+lensAdds :: (Foldable t, Adds b) => Lens' a b -> t a -> b
+lensAdds l xs = List.foldl' accum zero xs
+  where
+    accum ans x = add ans (x ^. l)
 
 genFromAddsSpec :: [String] -> AddsSpec c -> Gen Int
 genFromAddsSpec _ AddsSpecAny = genFromIntRange SzAny
@@ -344,18 +349,18 @@ instance Count SlotNo where
 -- ============================================================================
 -- Special accomodation for Type Families
 -- ============================================================================
-data DCertF era where
-  DCertF :: Proof era -> DCert era -> DCertF era
+data TxCertF era where
+  TxCertF :: Proof era -> TxCert era -> TxCertF era
 
-unDCertF :: DCertF era -> DCert era
-unDCertF (DCertF _ x) = x
+unTxCertF :: TxCertF era -> TxCert era
+unTxCertF (TxCertF _ x) = x
 
-instance Show (DCertF era) where
-  show (DCertF p x) = show (pcDCert p x)
+instance Show (TxCertF era) where
+  show (TxCertF p x) = show (pcTxCert p x)
 
 {-
-instance Ord (DCertF era) where
-  compare (DCertF p x) (DCertF q y) =
+instance Ord (TxCertF era) where
+  compare (TxCertF p x) (TxCertF q y) =
     case testEql p q of
       Just Refl -> case p of
          Shelley _ -> compare x y
@@ -367,13 +372,13 @@ instance Ord (DCertF era) where
       Nothing -> cmpIndex p q
 -}
 
-instance Eq (DCertF era) where
-  (DCertF (Shelley _) x) == (DCertF (Shelley _) y) = x == y
-  (DCertF (Allegra _) x) == (DCertF (Allegra _) y) = x == y
-  (DCertF (Mary _) x) == (DCertF (Mary _) y) = x == y
-  (DCertF (Alonzo _) x) == (DCertF (Alonzo _) y) = x == y
-  (DCertF (Babbage _) x) == (DCertF (Babbage _) y) = x == y
-  (DCertF (Conway _) x) == (DCertF (Conway _) y) = x == y
+instance Eq (TxCertF era) where
+  (TxCertF (Shelley _) x) == (TxCertF (Shelley _) y) = x == y
+  (TxCertF (Allegra _) x) == (TxCertF (Allegra _) y) = x == y
+  (TxCertF (Mary _) x) == (TxCertF (Mary _) y) = x == y
+  (TxCertF (Alonzo _) x) == (TxCertF (Alonzo _) y) = x == y
+  (TxCertF (Babbage _) x) == (TxCertF (Babbage _) y) = x == y
+  (TxCertF (Conway _) x) == (TxCertF (Conway _) y) = x == y
 
 -- =========
 data TxOutF era where

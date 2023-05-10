@@ -68,7 +68,7 @@ rhsMapNames ans _ = ans
 
 rhsSumNames :: Set (Name era) -> Sum era c -> Set (Name era)
 rhsSumNames ans (SumMap (Var v)) = Set.insert (Name v) ans
-rhsSumNames ans (Project _ (Var v)) = Set.insert (Name v) ans
+rhsSumNames ans (ProjMap _ _ (Var v)) = Set.insert (Name v) ans
 rhsSumNames ans _ = ans
 
 rhsMapNamesList :: Set (Name era) -> [Pred era] -> Set (Name era)
@@ -124,7 +124,7 @@ cseq :: Sum era c -> Sum era d -> Bool
 cseq (One x) (One y) = typedEq x y
 cseq (SumMap x) (SumMap y) = typedEq x y
 cseq (SumList x) (SumList y) = typedEq x y
-cseq (Project r1 x) (Project r2 y) = case testEql r1 r2 of
+cseq (ProjMap r1 _ x) (ProjMap r2 _ y) = case testEql r1 r2 of
   Just Refl -> typedEq x y
   Nothing -> False
 cseq _ _ = False

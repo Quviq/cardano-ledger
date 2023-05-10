@@ -38,6 +38,7 @@ import Test.Cardano.Ledger.Constrained.Classes (
   Sums (..),
   genFromAddsSpec,
   genFromNonNegAddsSpec,
+  lensAdds,
   projAdds,
   sumAdds,
  )
@@ -81,6 +82,9 @@ import Test.Cardano.Ledger.Generic.Proof (BabbageEra, Standard)
 import Test.Cardano.Ledger.Shelley.Serialisation.EraIndepGenerators ()
 import Test.Tasty
 import Test.Tasty.QuickCheck hiding (total)
+
+data SomeLens era t where
+  SomeLens :: Adds c => (Lens' t c) -> SomeLens era t
 
 -- ===========================================================
 {- TODO, possible extensions and improvements, so we don't forget
@@ -677,11 +681,11 @@ data RngSpec era rng where
     rng -> -- the smallest element in the partition (usually 0 or 1)
     Size -> -- the sum of all the elements must fall in the range denoted by the Size
     RngSpec era rng
-  -- | The range must sum upto 'c' through the projection witnessed by the (Sums t c) class
   RngProj ::
-    (Sums x c) =>
+    (Adds c) =>
     c -> -- the smallest element in the partition (usually 0 or 1)
-    Rep era c ->
+    Rep era x ->
+    Lens' x c ->
     Size -> -- the sum of all the elements must fall in the range denoted by the Size
     RngSpec era x
   -- | The range has exactly these elements
@@ -710,7 +714,7 @@ instance LiftT (RngSpec era a) where
 
 showRngSpec :: RngSpec era t -> String
 showRngSpec (RngSum small sz) = sepsP ["RngSum", show small, show sz]
-showRngSpec (RngProj small r sz) = sepsP ["RngProj", show small, show r, show sz]
+showRngSpec (RngProj small xrep _l sz) = sepsP ["RngProj", show small, show xrep, show sz]
 showRngSpec (RngElem r cs) = sepsP ["RngElem", show r, synopsis (ListR r) cs]
 showRngSpec (RngRel x) = sepsP ["RngRel", show x]
 showRngSpec RngAny = "RngAny"
@@ -733,12 +737,6 @@ mergeRngSpec a@(RngSum small1 sz1) b@(RngSum small2 sz2) =
   case sz1 <> sz2 of
     SzNever xs -> RngNever (["The RngSpec's are inconsistent.\n  " ++ show a ++ "\n  " ++ show b] ++ xs)
     sz3 -> RngSum (min small1 small2) sz3
-mergeRngSpec a@(RngProj sm1 r1 s1) b@(RngProj sm2 r2 s2) =
-  case testEql r1 r2 of
-    Just Refl -> case s1 <> s2 of
-      SzNever xs -> RngNever (["The RngSpec's are inconsistent.\n  " ++ show a ++ "\n  " ++ show b] ++ xs)
-      s3 -> RngProj (min sm1 sm2) r1 s3
-    Nothing -> RngNever [show a, show b, "The RngSpec's are inconsistent.", show r1 ++ " =/= " ++ show r2]
 mergeRngSpec a@(RngRel r1) b@(RngRel r2) =
   case r1 <> r2 of
     RelNever xs -> RngNever (["The RngSpec's are inconsistent.\n  " ++ show a ++ "\n  " ++ show b] ++ xs)
@@ -754,7 +752,7 @@ sizeForRng (RngSum small sz) =
   if toI small > 0
     then SzRng 1 (minSize sz `div` toI small)
     else SzLeast 1
-sizeForRng (RngProj small (_r :: (Rep era c)) sz) =
+sizeForRng (RngProj small _ _l sz) =
   if toI small > 0
     then SzRng 1 (minSize sz `div` toI small)
     else SzLeast 1
@@ -774,10 +772,10 @@ genFromRngSpec msgs genr n x = case x of
   (RngSum small sz) -> do
     tot <- genFromIntRange sz
     partition small (msg : msgs) n (fromI (msg : msgs) tot)
-  (RngProj small _ sz) -> do
+  (RngProj small xrep l sz) -> do
     tot <- genFromIntRange sz
     rs <- partition small (("partition " ++ show tot) : msg : msgs) n (fromI (msg : msgs) tot)
-    mapM (genT msgs) rs
+    mapM (\r -> do ans <- genRep xrep; pure (ans & l .~ r)) rs
   (RngRel relspec) -> Set.toList <$> genFromRelSpec (msg : msgs) genr n relspec
   (RngElem _ xs) -> pure xs
   where
@@ -786,17 +784,16 @@ genFromRngSpec msgs genr n x = case x of
 -- | Generate a random RngSpec, appropriate for a given size. In order to accomodate any OrdCond
 --   (EQL, LTH, LTE, GTE, GTH) in RngSum and RngProj, we make the total a bit larger than 'n'
 genRngSpec ::
-  forall w c era.
-  ( Adds w
-  , Sums w c
-  ) =>
+  forall w era.
+  Adds w =>
   Gen w ->
   Rep era w ->
-  Rep era c ->
+  -- Rep era c ->
+  SomeLens era w ->
   Int ->
   Gen (RngSpec era w)
 genRngSpec _ repw _ 0 = pure $ RngRel (relEqual repw Set.empty)
-genRngSpec g repw repc n = do
+genRngSpec g repw (SomeLens (l :: Lens' w c)) n = do
   frequency
     [
       ( 3
@@ -810,7 +807,7 @@ genRngSpec g repw repc n = do
       , do
           smallest <- genSmall @c
           sz <- genBigSize (max 1 (smallest * n))
-          pure (RngProj (fromI ["genRngSpec " ++ show n] smallest) repc sz)
+          pure (RngProj (fromI ["genRngSpec " ++ show n] smallest) repw l sz)
       )
     , (4, RngRel <$> genRelSpec @w ["genRngSpec "] g repw n)
     , (1, pure RngAny)
@@ -822,7 +819,7 @@ runRngSpec _ (RngNever _) = False
 runRngSpec _ RngAny = True
 runRngSpec ll (RngElem _ xs) = ll == xs
 runRngSpec ll (RngSum _ sz) = runSize (toI (sumAdds ll)) sz
-runRngSpec ll (RngProj _ _ sz) = runSize (toI (projAdds ll)) sz
+runRngSpec ll (RngProj _ _ l sz) = runSize (toI (lensAdds l ll)) sz
 runRngSpec ll (RngRel rspec) = runRelSpec (Set.fromList ll) rspec
 
 -- ------------------------------------------
@@ -841,42 +838,42 @@ instance Sums Coin Word64 where
   genT _ n = pure (Coin (fromIntegral n))
 
 genConsistentRngSpec ::
-  ( Adds w
-  , Sums w c
-  ) =>
+  Adds w =>
   Int ->
   Gen w ->
   Rep era w ->
   Rep era c ->
+  SomeLens era w ->
   Gen (RngSpec era w, RngSpec era w)
-genConsistentRngSpec n g repw repc = do
-  x1 <- genRngSpec g repw repc n
+genConsistentRngSpec n g repw repc sl@(SomeLens l) = do
+  x1 <- genRngSpec g repw sl n
   x2 <- case x1 of
-    RngAny -> genRngSpec g repw repc n
-    RngRel RelAny -> genRngSpec g repw repc n
+    RngAny -> genRngSpec g repw sl n
+    RngRel RelAny -> genRngSpec g repw sl n
     RngRel x -> RngRel <$> genConsistentRelSpec msgs g x
     RngSum sm sz -> do
       sz2 <- suchThat genSize (Maybe.isJust . consistent sz)
       pure $ RngSum (add sm (fromI msgs 2)) sz2 -- Make the smaller bigger
-    RngProj sm rep sz -> do
-      sz2 <- suchThat genSize (Maybe.isJust . consistent sz)
-      pure $ RngProj (add sm (fromI msgs 2)) rep sz2
+    RngProj _sm _rep _l _sz -> pure RngAny
     RngElem _ xs ->
       frequency
         [ (1, pure $ RngSum (fromI msgs 1) (SzExact (toI (sumAdds xs))))
-        , (1, pure $ RngProj (fromI msgs 1) repc (SzExact (toI (projAdds xs))))
+        , (1, pure $ RngProj (fromI msgs 1) repw l (SzExact (toI (lensAdds l xs))))
         ]
     RngNever xs -> errorMess "RngNever in genConsistentRngSpec" xs
   pure (x1, x2)
   where
     msgs = [seps ["genConsistentRngSpec", show repw, show repc]]
 
+word64CoinL :: Lens' Word64 Coin
+word64CoinL = lens (Coin . fromIntegral) (\_w (Coin n) -> fromIntegral n)
+
 -- Tests
 
 testConsistentRng :: Gen Property
 testConsistentRng = do
   n <- chooseInt (3, 10)
-  (s1, s2) <- genConsistentRngSpec @_ @_ @TT n (choose (1, 1000)) Word64R CoinR
+  (s1, s2) <- genConsistentRngSpec n (choose (1, 1000)) Word64R CoinR (SomeLens word64CoinL)
   case s1 <> s2 of
     RngNever ms -> pure $ counterexample (unlines (["genConsistentRng fails", show s1, show s2] ++ ms)) False
     _ -> pure $ counterexample "" True
@@ -884,7 +881,7 @@ testConsistentRng = do
 testSoundRngSpec :: Gen Property
 testSoundRngSpec = do
   n <- choose (2, 8)
-  spec <- genRngSpec (choose (1, 1000)) Word64R CoinR n
+  spec <- genRngSpec (choose (1, 1000)) Word64R (SomeLens word64CoinL) n
   let msgs = ["testSoundRngSpec " ++ show n ++ " " ++ show spec]
   list <- genFromRngSpec @TT msgs (choose (1, 1000)) n spec
   pure $
@@ -894,7 +891,7 @@ testSoundRngSpec = do
 
 testMergeRngSpec :: Gen Property
 testMergeRngSpec = do
-  (s1, s2) <- genConsistentRngSpec 3 (choose (1, 1000)) Word64R CoinR
+  (s1, s2) <- genConsistentRngSpec 3 (choose (1, 1000)) Word64R CoinR (SomeLens word64CoinL)
   case s1 <> s2 of
     RngNever _ -> trace ("inconsistent RngSpec " ++ show s1 ++ " " ++ show s2) (pure (counterexample "" True))
     s3 -> do
@@ -930,11 +927,14 @@ testMergeRngSpec = do
           )
           (runRngSpec list s1 && runRngSpec list s2)
 
+intDeltaCoinL :: Lens' Int DeltaCoin
+intDeltaCoinL = lens (DeltaCoin . fromIntegral) (\_i (DeltaCoin d) -> fromIntegral d)
+
 manyMergeRngSpec :: Gen (Int, Int, [String])
 manyMergeRngSpec = do
   n <- chooseInt (3, 10)
-  xs <- vectorOf 50 (genRngSpec (choose (1, 100)) IntR DeltaCoinR n)
-  ys <- vectorOf 50 (genRngSpec (choose (1, 100)) IntR DeltaCoinR n)
+  xs <- vectorOf 50 (genRngSpec (choose (1, 100)) IntR (SomeLens intDeltaCoinL) n)
+  ys <- vectorOf 50 (genRngSpec (choose (1, 100)) IntR (SomeLens intDeltaCoinL) n)
   let check (x, y, m) = do
         let size = sizeForRng m
         i <- genFromSize size
@@ -1107,19 +1107,21 @@ sizeForMapSpec (MapNever _) = SzAny
 
 -- | Generate a random MapSpec
 genMapSpec ::
-  forall era dom w c.
-  (Ord dom, Era era, Adds w, Sums w c) =>
+  forall era dom w.
+  (Ord dom, Era era, Adds w) =>
   Gen dom ->
   Rep era dom ->
   Rep era w ->
-  Rep era c ->
+  -- Rep era c ->
+  -- (forall c. Adds c => Lens' w c) ->
+  SomeLens era w ->
   Int ->
   Gen (MapSpec era dom w)
-genMapSpec genD repd repw repc n = frequency [(1, pure mempty), (6, genmapspec)]
+genMapSpec genD repd repw l n = frequency [(1, pure mempty), (6, genmapspec)]
   where
     genmapspec = do
       relspec <- genRelSpec ["genMapSpec " ++ show n ++ " " ++ show repd] genD repd n
-      rngspec <- genRngSpec (genRep @era repw) repw repc n
+      rngspec <- genRngSpec (genRep @era repw) repw l n
       pure (MapSpec (SzExact n) relspec PairAny rngspec)
 
 -- | Generate a (Map d t) from a (MapSpec era d r)
@@ -1213,15 +1215,15 @@ remove rep part x [] =
 genMapSpecIsSound :: Gen Property
 genMapSpecIsSound = do
   n <- chooseInt (1, 15)
-  spec <- genMapSpec (chooseInt (1, 10000)) IntR Word64R CoinR n
+  spec <- genMapSpec (chooseInt (1, 10000)) IntR Word64R (SomeLens word64CoinL) n
   mp <- genFromMapSpec @TT "mapSpecIsSound" [] (choose (1, 10000)) (choose (1, 10000)) spec
   pure $ counterexample ("spec = " ++ show spec ++ "\nmp = " ++ show mp) (runMapSpec mp spec)
 
 manyMergeMapSpec :: Gen (Int, Int, [String])
 manyMergeMapSpec = do
   n <- chooseInt (1, 10)
-  xs <- vectorOf 50 (genMapSpec (choose (1, 100)) IntR Word64R CoinR n)
-  ys <- vectorOf 50 (genMapSpec (choose (1, 100)) IntR Word64R CoinR n)
+  xs <- vectorOf 50 (genMapSpec (choose (1, 100)) IntR Word64R (SomeLens word64CoinL) n)
+  ys <- vectorOf 50 (genMapSpec (choose (1, 100)) IntR Word64R (SomeLens word64CoinL) n)
   let check (x, y, m) = do
         let msize = sizeForMapSpec m
         i <- genFromSize msize
@@ -1798,7 +1800,7 @@ someMap r = do
 -- Some proto-tests, to be fixed soon
 
 aMap :: Era era => Gen (MapSpec era Int Word64)
-aMap = genMapSpec (chooseInt (1, 1000)) IntR Word64R CoinR 4
+aMap = genMapSpec (chooseInt (1, 1000)) IntR Word64R (SomeLens word64CoinL) 4
 
 testm :: Gen (MapSpec TT Int Word64)
 testm = do

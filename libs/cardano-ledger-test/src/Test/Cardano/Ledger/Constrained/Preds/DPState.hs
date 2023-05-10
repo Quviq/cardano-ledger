@@ -11,9 +11,10 @@ import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Lenses (fGenDelegGenKeyHashL)
 import Test.Cardano.Ledger.Constrained.Monad (monadTyped)
+import Test.Cardano.Ledger.Constrained.Preds.Repl (goRepl)
 import Test.Cardano.Ledger.Constrained.Preds.Universes
 import Test.Cardano.Ledger.Constrained.Rewrite (standardOrderInfo)
-import Test.Cardano.Ledger.Constrained.Size (OrdCond (..))
+import Test.Cardano.Ledger.Constrained.Size (OrdCond (..), Size (..), genFromSize)
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
@@ -27,6 +28,12 @@ import Test.Cardano.Ledger.Generic.PrettyCore (
  )
 import Test.Cardano.Ledger.Generic.Proof
 import Test.QuickCheck
+
+-- | A good spread of Coins with at least one (Coin 0)
+manyCoin :: Size -> Gen [Coin]
+manyCoin size = do
+  n <- genFromSize size
+  (Coin 0 :) <$> vectorOf (n - 1) variedCoin
 
 -- ======================================
 
@@ -70,11 +77,10 @@ pstateNames =
   , "poolDeposits"
   ]
 
-pstatePreds :: Reflect era => Proof era -> [Pred era]
+pstatePreds :: Proof era -> [Pred era]
 pstatePreds _p =
-  [ Random epochNo -- Should this be defined in Universes?
-  -- These Sized constraints are needd to be ensure that regPools is bigger than retiring
-  , Sized (ExactSize 3) retiring
+  [ -- These Sized constraints are needd to be ensure that regPools is bigger than retiring
+    Sized (ExactSize 3) retiring
   , Sized (AtLeast 3) regPools
   , Subset (Dom regPools) poolHashUniv
   , Subset (Dom futureRegPools) poolHashUniv
@@ -87,17 +93,17 @@ pstatePreds _p =
   , Choose
       (ExactSize 3)
       epochs
-      [ (Constr "id" id ^$ e, [CanFollow e epochNo])
-      , (Constr "(+1)" (+ 1) ^$ e, [CanFollow e epochNo])
-      , (Constr "(+3)" (+ 3) ^$ e, [CanFollow e epochNo])
-      , (Constr "(+5)" (+ 5) ^$ e, [CanFollow e epochNo])
+      [ (Constr "id" id ^$ e, [CanFollow e currentEpoch])
+      , (Constr "(+1)" (+ 1) ^$ e, [CanFollow e currentEpoch])
+      , (Constr "(+3)" (+ 3) ^$ e, [CanFollow e currentEpoch])
+      , (Constr "(+5)" (+ 5) ^$ e, [CanFollow e currentEpoch])
       ]
   , -- poolDistr not needed in PState, but is needed in NewEpochState
     -- But since it is so intimately tied to regPools we define it here
     -- Alternately we could put this in NewEpochState, and insist that pStateStage
     -- preceed newEpochStateStage
     Dom regPools :=: Dom poolDistr
-  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [Project RationalR poolDistr]
+  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [ProjMap RationalR individualPoolStakeL poolDistr]
   ]
   where
     e = var "e" EpochR
@@ -132,13 +138,15 @@ mainP = do
 
 dstatePreds :: Proof era -> [Pred era]
 dstatePreds _p =
-  [ Sized (Range 1 8) rewards -- Small enough that it leaves some slack with credUniv (size about 30),
+  [ MetaSize (SzRng 8 15) rewardSize
+  , Sized rewardSize rewards -- Small enough that it leaves some slack with credUniv (size about 30),
   -- but it also cannot be empty
   , Sized (AtLeast 1) treasury --  If these have size zero, the SumsTo can't be solved
   , Sized (AtLeast 1) instanReserves
   , Random instanTreasury
   , Dom rewards :⊆: credsUniv
-  , Member (Lit CoinR (Coin 0)) (Rng rewards) -- At least 1 cred has zero rewards
+  , GenFrom rewardRange (Constr "many" manyCoin ^$ rewardSize)
+  , rewardRange :=: Elems rewards
   , NotMember (Lit CoinR (Coin 0)) (Rng stakeDeposits)
   , Dom rewards :=: Dom stakeDeposits
   , Dom delegations :⊆: Dom rewards
@@ -154,6 +162,8 @@ dstatePreds _p =
   where
     instanReservesSum = Var (V "instanReservesSum" CoinR No)
     instanTreasurySum = Var (V "instanTreasurySum" CoinR No)
+    rewardSize = var "rewardSize" SizeR
+    rewardRange = var "rewardRange" (ListR CoinR)
 
 dstateStage ::
   Reflect era =>
@@ -174,8 +184,7 @@ mainD = do
       )
   dState <- monadTyped $ runTarget env dstateT
   putStrLn (show (pcDState dState))
-  putStrLn "\n"
-  putStrLn (unlines (otherFromEnv [] env))
+  goRepl proof env ""
 
 -- ===============================================
 

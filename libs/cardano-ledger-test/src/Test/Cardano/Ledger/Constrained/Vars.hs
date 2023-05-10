@@ -10,6 +10,7 @@ module Test.Cardano.Ledger.Constrained.Vars where
 
 import Cardano.Ledger.Address (Addr (..), RewardAcnt (..), Withdrawals (..))
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Alonzo.Core (ppPricesL)
 import Cardano.Ledger.BaseTypes (BlocksMade (..), EpochNo, Network (..), ProtVer (..), SlotNo (..), StrictMaybe (..))
 import Cardano.Ledger.CertState (CertState (..), DState (..), FutureGenDeleg (..), PState (..), VState (..))
 import qualified Cardano.Ledger.CertState as DPS (InstantaneousRewards (..))
@@ -38,7 +39,6 @@ import Cardano.Ledger.Era (Era (EraCrypto))
 import Cardano.Ledger.Keys (GenDelegPair, GenDelegs (..), KeyHash, KeyRole (..))
 import Cardano.Ledger.PoolDistr (IndividualPoolStake (..), PoolDistr (..))
 import Cardano.Ledger.PoolParams (PoolParams)
-import Cardano.Ledger.Shelley.Delegation (DCert)
 import Cardano.Ledger.Shelley.LedgerState (
   AccountState (..),
   EpochState (..),
@@ -48,7 +48,15 @@ import Cardano.Ledger.Shelley.LedgerState (
   UTxOState (..),
   smartUTxOState,
  )
+import Cardano.Ledger.Shelley.TxCert (TxCert)
+
+import Cardano.Ledger.Conway.Governance (ConwayTallyState (..))
+import Cardano.Ledger.Core (PParamsHKD)
+import Cardano.Ledger.Mary.Value (MultiAsset (..))
+import Cardano.Ledger.Shelley.Governance (ShelleyPPUPState (..))
+import qualified Cardano.Ledger.Shelley.Governance as Core (GovernanceState (..))
 import Cardano.Ledger.Shelley.PParams (ProposedPPUpdates (..))
+import qualified Cardano.Ledger.Shelley.PParams as Core (ProposedPPUpdates (..))
 import Cardano.Ledger.Shelley.PoolRank (NonMyopic (..))
 import Cardano.Ledger.Shelley.RewardUpdate (PulsingRewUpdate (Complete))
 import qualified Cardano.Ledger.Shelley.RewardUpdate as RU
@@ -66,11 +74,11 @@ import Numeric.Natural (Natural)
 import Test.Cardano.Ledger.Babbage.Serialisation.Generators ()
 import Test.Cardano.Ledger.Constrained.Ast (Target (..), Term (Var), constTarget, fieldToTerm, ppTarget, (^$))
 import Test.Cardano.Ledger.Constrained.Classes (
-  DCertF (..),
   GovernanceState (..),
   PParamsF (..),
   PParamsUpdateF (..),
   ScriptF (..),
+  TxCertF (..),
   TxOutF (..),
   ValueF (..),
   governanceProposedL,
@@ -85,21 +93,22 @@ import Test.Cardano.Ledger.Constrained.Env (Access (..), AnyF (..), Field (..), 
 import Test.Cardano.Ledger.Constrained.Lenses
 import Test.Cardano.Ledger.Constrained.TypeRep (Rep (..), testEql, (:~:) (Refl))
 import Test.Cardano.Ledger.Core.KeyPair (KeyPair (..))
-import Test.Cardano.Ledger.Generic.Proof (Evidence (..), Proof (..), Reflect (..))
-
-import Cardano.Ledger.Conway.Governance (ConwayTallyState (..))
-import Cardano.Ledger.Mary.Value (MultiAsset (..))
-import Cardano.Ledger.Shelley.Governance (ShelleyPPUPState (..))
-import qualified Cardano.Ledger.Shelley.Governance as Core (GovernanceState (..))
-import qualified Cardano.Ledger.Shelley.PParams as Core (ProposedPPUpdates (..))
 import Test.Cardano.Ledger.Generic.Fields (TxBodyField (..))
+import Test.Cardano.Ledger.Generic.Proof (Evidence (..), Proof (..), Reflect (..), ValueWit (..), whichValue)
 import Test.Cardano.Ledger.Generic.Updaters (newTxBody)
 
-import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Tag (..))
-import Cardano.Ledger.Alonzo.Scripts.Data (Data (..))
+import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices (..), Tag (..))
+import Cardano.Ledger.Alonzo.Scripts.Data (Data (..), Datum (..))
 import Cardano.Ledger.Alonzo.Tx (ScriptIntegrity (..))
 import Cardano.Ledger.Alonzo.TxWits (RdmrPtr (..), Redeemers (..), TxDats (..))
 import Cardano.Ledger.Hashes (DataHash, ScriptHash)
+import Cardano.Ledger.Mary.Value (
+  AssetName (..),
+  MaryValue (..),
+  MultiAsset (..),
+  PolicyID (..),
+  multiAssetFromList,
+ )
 
 -- ================================================================
 
@@ -130,8 +139,8 @@ getName x = error ("nameOf can't find the name in: " ++ show x)
 
 type NELens era t = Lens' (NewEpochState era) t
 
-epochNo :: Term era EpochNo
-epochNo = Var $ V "epochNo" EpochR (Yes NewEpochStateR nesELL)
+currentEpoch :: Term era EpochNo
+currentEpoch = Var (V "currentEpoch" EpochR (Yes NewEpochStateR nesELL))
 
 prevBlocksMade :: Term era (Map (KeyHash 'StakePool (EraCrypto era)) Natural)
 prevBlocksMade = Var $ V "prevBlocksMade" (MapR PoolHashR NaturalR) (Yes NewEpochStateR nesBprevL)
@@ -564,14 +573,22 @@ utxoCoin :: Term era Coin
 utxoCoin = Var $ V "utxoCoin" CoinR No
 
 -- | The universe of Staking Credentials. A credential is either KeyHash of a ScriptHash
+--   Any Plutus scripts in this Universe are NOT Spending scripts, so they do not need a Redeemer
 credsUniv :: Term era (Set (Credential 'Staking (EraCrypto era)))
 credsUniv = Var $ V "credsUniv" (SetR CredR) No
+
+-- | The universe of Staking Credentials. A credential is either KeyHash of a ScriptHash
+--   All Plutus scripts in this Universe are SPENDING scripts, so they will need a Redeemer
+--   Use this ONLY in the Pay-part of an Address (Do not use this in the Stake-part of an Address)
+spendCredsUniv :: Term era (Set (Credential 'Payment (EraCrypto era)))
+spendCredsUniv = Var $ V "spendCredsUniv" (SetR PCredR) No
 
 -- | The universe of Voting Credentials. A credential is either KeyHash of a ScriptHash
 voteUniv :: Term era (Set (Credential 'Voting (EraCrypto era)))
 voteUniv = Var $ V "voteUniv" (SetR VCredR) No
 
 -- | The universe of Payment Credentials. A credential is either KeyHash of a ScriptHash
+--   We only find payment credentials in the Payment part of an Addr.
 payUniv :: Term era (Set (Credential 'Payment (EraCrypto era)))
 payUniv = Var $ V "payUniv" (SetR PCredR) No
 
@@ -601,10 +618,19 @@ genesisHashUniv = Var $ V "genesisHashUniv" (MapR GenHashR GenDelegPairR) No
 voteHashUniv :: Term era (Set (KeyHash 'Voting (EraCrypto era)))
 voteHashUniv = Var $ V "voteHashUniv" (SetR VHashR) No
 
--- | The universe of TxIns. Pais of TxId: hashes of previously run transaction bodies,
+-- | The universe of TxIns. Pairs of TxId: hashes of previously run transaction bodies,
 --   and TxIx: indexes of one of the bodies outputs.
 txinUniv :: Term era (Set (TxIn (EraCrypto era)))
 txinUniv = Var $ V "txinUniv" (SetR TxInR) No
+
+txoutUniv :: Proof era -> Term era [TxOutF era]
+txoutUniv p = Var $ V "txoutUniv" (ListR (TxOutR p)) No
+
+datumsUniv :: Era era => Term era [Datum era]
+datumsUniv = Var (V "datumsUniv" (ListR DatumR) No)
+
+multiAssetUniv :: Term era [MultiAsset (EraCrypto era)]
+multiAssetUniv = Var (V "multiAssetUniv" (ListR MultiAssetR) No)
 
 -- | The universe of key hashes, and the signing and validating key pairs they represent.
 keymapUniv :: Term era (Map (KeyHash 'Witness (EraCrypto era)) (KeyPair 'Witness (EraCrypto era)))
@@ -613,8 +639,7 @@ keymapUniv = Var (V "keymapUniv" (MapR WitHashR KeyPairR) No)
 currentSlot :: Term era SlotNo
 currentSlot = Var (V "currentSlot" SlotNoR No)
 
-currentEpoch :: Term era EpochNo
-currentEpoch = Var (V "currentEpoch" EpochR No)
+-- See also currentEpoch in NewEpochState fields
 
 network :: Term era Network
 network = Var (V "network" NetworkR No)
@@ -677,7 +702,7 @@ newEpochStateConstr
 newEpochStateT :: Proof era -> Target era (NewEpochState era)
 newEpochStateT proof =
   Constr "NewEpochState" (newEpochStateConstr proof)
-    ^$ epochNo
+    ^$ currentEpoch
     ^$ prevBlocksMade
     ^$ currBlocksMade
     :$ epochStateT proof
@@ -820,6 +845,9 @@ minFeeB proof =
         (Yes (PParamsR proof) $ withEraPParams proof (pparamsWrapperL . ppMinFeeBL))
     )
 
+-- ppPrices :: Proof era -> Term era Prices
+-- ppPrices proof = Var (V "ppPrices" undefined) (Yes (PParamsR proof) $ withEraPParams proof (pparamsWrapperL . ppPricesL))
+
 -- | Max Block Body Size
 maxBBSize :: Proof era -> Term era Natural
 maxBBSize p =
@@ -884,11 +912,11 @@ outputs p = Var $ V "outputs" (ListR (TxOutR p)) No
 collateralReturn :: Proof era -> Term era (TxOutF era)
 collateralReturn p = Var $ V "collateralReturn" (TxOutR p) No
 
-totalCol :: Term era Coin
-totalCol = Var $ V "totalCol" CoinR No
+totalCol :: Term era (Maybe Coin)
+totalCol = Var $ V "totalCol" (MaybeR CoinR) No
 
-certs :: Reflect era => Term era [DCertF era]
-certs = Var $ V "certs" (ListR (DCertR reify)) No
+certs :: Reflect era => Term era [TxCertF era]
+certs = Var $ V "certs" (ListR (TxCertR reify)) No
 
 withdrawals :: forall era. Term era (Map (RewardAcnt (EraCrypto era)) Coin)
 withdrawals = Var $ V "withdrawals" (MapR (RewardAcntR @era) CoinR) No
@@ -949,6 +977,32 @@ valCoinF = Field "valCoin" CoinR (ValueR reify) valueFCoinL
 
 valCoin :: Reflect era => Term era Coin
 valCoin = fieldToTerm valCoinF
+
+maryValueMultiAssetL :: Lens' (MaryValue c) (MultiAsset c)
+maryValueMultiAssetL =
+  lens
+    (\(MaryValue _ ma) -> ma)
+    (\(MaryValue c _) ma -> MaryValue c ma)
+
+valueFMultiAssetL :: Lens' (ValueF era) (MultiAsset (EraCrypto era))
+valueFMultiAssetL = lens get put
+  where
+    get :: ValueF era -> MultiAsset (EraCrypto era)
+    get (ValueF p x) = case whichValue p of
+      ValueShelleyToAllegra -> MultiAsset Map.empty
+      ValueMaryToConway -> x ^. maryValueMultiAssetL
+
+    put :: ValueF era -> MultiAsset (EraCrypto era) -> ValueF era
+    put (ValueF p x) new = case whichValue p of
+      ValueShelleyToAllegra -> ValueF p x
+      ValueMaryToConway -> ValueF p (x & maryValueMultiAssetL .~ new)
+
+-- | a Field from (ValueF era) to MultiAsset
+valueFMultiAssetF :: Reflect era => Field era (ValueF era) (MultiAsset (EraCrypto era))
+valueFMultiAssetF = Field "valueFMultiAsset" MultiAssetR (ValueR reify) valueFMultiAssetL
+
+valueFMultiAsset :: Reflect era => Term era (MultiAsset (EraCrypto era))
+valueFMultiAsset = fieldToTerm valueFMultiAssetF
 
 -- | a Field from (TxOut era) to (Addr era)
 txoutAddressF :: Reflect era => Field era (TxOutF era) (Addr (EraCrypto era))

@@ -67,7 +67,6 @@ import Test.Cardano.Ledger.Generic.TxGen (
   genAlonzoTx,
   genUTxO,
  )
-import Test.Cardano.Ledger.Shelley.ConcreteCryptoTypes (StandardCrypto)
 import Test.Cardano.Ledger.Shelley.Serialisation.EraIndepGenerators ()
 import Test.QuickCheck
 import Test.Tasty (TestTree, defaultMain, testGroup)

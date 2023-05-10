@@ -356,8 +356,8 @@ sumPreds proof =
   , fees :=: (Lit CoinR (Coin 400))
   , deposits :=: (Lit CoinR (Coin 200))
   , SumsTo (Right (Coin 1)) totalAda LTE [One fees, One deposits, One utxoAmt]
-  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [Project RationalR poolDistr]
-  , SumsTo (Right (Coin 1)) utxoAmt GTH [Project CoinR (utxo proof)]
+  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [ProjMap RationalR individualPoolStakeL poolDistr]
+  , SumsTo (Right (Coin 1)) utxoAmt GTH [ProjMap CoinR outputCoinL (utxo proof)]
   , Sized (AtLeast 1) (utxo proof) -- Any map that is summed, to a nonzero amount, can't be empty.
   , Sized (AtLeast 1) poolDistr
   ]
@@ -512,12 +512,12 @@ test15 =
 
 -- ============================================================
 
-preds16 :: Reflect era => Proof era -> [Pred era]
+preds16 :: Proof era -> [Pred era]
 preds16 _proof =
   [ Sized (ExactSize 6) poolHashUniv
   , Sized (Range 1 3) (Dom poolDistr) -- At least 1 but smaller than the poolHashUniv
   , Dom poolDistr :⊆: poolHashUniv
-  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [Project RationalR poolDistr]
+  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [ProjMap RationalR individualPoolStakeL poolDistr]
   , Sized (Range 1 4) (Dom foox) -- At least 1 but smaller than the poolHashUniv
   , Dom foox :⊆: poolHashUniv
   , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [SumMap foox]
@@ -617,7 +617,7 @@ accountstatePreds _p = [] -- Constraints on reserves and treasury appear in dsta
 
 utxostatePreds :: Reflect era => Proof era -> [Pred era]
 utxostatePreds proof =
-  [ SumsTo (Right (Coin 1)) utxoCoin EQL [Project CoinR (utxo proof)]
+  [ SumsTo (Right (Coin 1)) utxoCoin EQL [ProjMap CoinR outputCoinL (utxo proof)]
   , SumsTo (Right (Coin 1)) deposits EQL [SumMap stakeDeposits, SumMap poolDeposits]
   , SumsTo (Right (Coin 1)) totalAda EQL [One utxoCoin, One treasury, One reserves, One fees, One deposits, SumMap rewards]
   , Random fees
@@ -625,7 +625,7 @@ utxostatePreds proof =
   , Random (futureProposalsT proof)
   ]
 
-epochstatePreds :: Reflect era => Proof era -> [Pred era]
+epochstatePreds :: Proof era -> [Pred era]
 epochstatePreds proof =
   [ Random markStake
   , Random markDelegs
@@ -642,7 +642,7 @@ epochstatePreds proof =
   , Sized (AtLeast 1) (maxBHSize proof)
   , Sized (AtLeast 1) (maxTxSize proof)
   , -- , Random (maxBBSize proof) -- This will cause underflow on Natural
-    SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [Project RationalR markPoolDistr]
+    SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [ProjMap RationalR individualPoolStakeL markPoolDistr]
   , SumsTo (Right 1) (maxBBSize proof) LTE [One (maxBHSize proof), One (maxTxSize proof)]
   , Component
       (Right (pparams proof))
@@ -651,12 +651,12 @@ epochstatePreds proof =
   where
     pp = PParamsR proof
 
-newepochstatePreds :: Reflect era => Proof era -> [Pred era]
+newepochstatePreds :: Proof era -> [Pred era]
 newepochstatePreds _proof =
-  [ Random epochNo
+  [ Random currentEpoch
   , Sized (ExactSize 8) (Dom prevBlocksMade) -- Both prevBlocksMade and prevBlocksMadeDom will have size 8
   , Sized (ExactSize 8) (Dom currBlocksMade)
-  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [Project RationalR poolDistr]
+  , SumsTo (Right (1 % 1000)) (Lit RationalR 1) EQL [ProjMap RationalR individualPoolStakeL poolDistr]
   ]
 
 newepochConstraints :: Reflect era => Proof era -> [Pred era]
