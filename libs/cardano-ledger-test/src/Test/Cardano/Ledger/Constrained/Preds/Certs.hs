@@ -151,11 +151,14 @@ certsPreds p = case whichTxCert p of
         (Range 0 5)
         shelleycerts
         [ (sRegKey ^$ stakeCred, [NotMember stakeCred (Dom rewards)])
-        , (sUnRegKey ^$ deregkey, [MapMember deregkey (Lit CoinR (Coin 0)) rewards])
-        , (sDelegStake ^$ stakeCred ^$ poolHash, [Member stakeCred (Dom rewards), Member poolHash (Dom regPools)])
+        , (sUnRegKey ^$ deregkey, [MapMember deregkey (Lit CoinR (Coin 0)) (Left rewards)])
+        ,
+          ( sDelegStake ^$ stakeCred ^$ poolHash
+          , [Member (Left stakeCred) (Dom rewards), Member (Left poolHash) (Dom regPools)]
+          )
         ,
           ( sRetirePool ^$ poolHash ^$ epoch
-          , [Member poolHash (Dom regPools), epoch :<-: (Constr "+" (+) ^$ currentEpoch ^$ epochDelta)]
+          , [Member (Left poolHash) (Dom regPools), epoch :<-: (Constr "+" (+) ^$ currentEpoch ^$ epochDelta)]
           )
         , (sRegPool ^$ poolParams, [Random poolParams])
         ,
@@ -181,28 +184,36 @@ certsPreds p = case whichTxCert p of
         ,
           ( cUnRegKey ^$ stakeCred ^$ mkeydeposit
           ,
-            [ MapMember stakeCred (Lit CoinR (Coin 0)) rewards
-            , Maybe mkeydeposit (idTarget kd) [MapMember stakeCred kd stakeDeposits]
+            [ MapMember stakeCred (Lit CoinR (Coin 0)) (Left rewards)
+            , Maybe mkeydeposit (idTarget kd) [MapMember stakeCred kd (Left stakeDeposits)]
             ]
           )
-        , (cDelegStake ^$ stakeCred ^$ poolHash, [Member stakeCred (Dom rewards), Member poolHash (Dom regPools)])
-        , (cDelegVote ^$ stakeCred ^$ vote, [Member stakeCred (Dom rewards), Member vote voteUniv])
+        ,
+          ( cDelegStake ^$ stakeCred ^$ poolHash
+          , [Member (Left stakeCred) (Dom rewards), Member (Left poolHash) (Dom regPools)]
+          )
+        , (cDelegVote ^$ stakeCred ^$ vote, [Member (Left stakeCred) (Dom rewards), Member (Left vote) voteUniv])
         ,
           ( cRegDelegStake ^$ stakeCred ^$ poolHash ^$ kd
-          , [Member stakeCred (Dom rewards), Member poolHash (Dom regPools), kd :=: (keyDepAmt p)]
+          , [Member (Left stakeCred) (Dom rewards), Member (Left poolHash) (Dom regPools), kd :=: (keyDepAmt p)]
           )
         ,
           ( cRegDelegVote ^$ stakeCred ^$ vote ^$ kd
-          , [Member stakeCred (Dom rewards), Member vote voteUniv, kd :=: (keyDepAmt p)]
+          , [Member (Left stakeCred) (Dom rewards), Member (Left vote) voteUniv, kd :=: (keyDepAmt p)]
           )
         ,
           ( cRegDelegStakeVote ^$ stakeCred ^$ poolHash ^$ vote ^$ kd
-          , [Member stakeCred (Dom rewards), Member vote voteUniv, Member poolHash (Dom regPools), kd :=: (keyDepAmt p)]
+          ,
+            [ Member (Left stakeCred) (Dom rewards)
+            , Member (Left vote) voteUniv
+            , Member (Left poolHash) (Dom regPools)
+            , kd :=: (keyDepAmt p)
+            ]
           )
         , (cRegPool ^$ poolParams, [Random poolParams])
         ,
           ( cRetirePool ^$ poolHash ^$ epoch
-          , [Member poolHash (Dom regPools), epoch :<-: (Constr "+" (+) ^$ currentEpoch ^$ epochDelta)]
+          , [Member (Left poolHash) (Dom regPools), epoch :<-: (Constr "+" (+) ^$ currentEpoch ^$ epochDelta)]
           )
         ]
     ]

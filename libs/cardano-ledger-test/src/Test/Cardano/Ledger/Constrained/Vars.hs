@@ -623,13 +623,41 @@ voteHashUniv = Var $ V "voteHashUniv" (SetR VHashR) No
 txinUniv :: Term era (Set (TxIn (EraCrypto era)))
 txinUniv = Var $ V "txinUniv" (SetR TxInR) No
 
-txoutUniv :: Proof era -> Term era [TxOutF era]
-txoutUniv p = Var $ V "txoutUniv" (ListR (TxOutR p)) No
+-- | The universe of TxOuts.
+--   It contains 'colTxoutUniv' as a sublist and 'feeOutput' as an element
+--   See also 'feeOutput' which is defined by the universes, and is related.
+txoutUniv :: Proof era -> Term era (Set (TxOutF era))
+txoutUniv p = Var (V "txoutUniv" (SetR (TxOutR p)) No)
+
+-- | The universe of TxOuts useable for collateral
+--   The collateral TxOuts consists only of VKey addresses
+--   and The collateral TxOuts do not contain any non-ADA part
+colTxoutUniv :: Proof era -> Term era (Set (TxOutF era))
+colTxoutUniv p = Var (V "colTxoutUniv" (SetR (TxOutR p)) No)
+
+-- | A TxOut, guaranteed to have
+--   1) no scripts in its Addr, and
+--   2) It's Addr is in the addrUniv
+--   3) 'bigCoin' is stored in the Addr Value, and
+--   4) the Addr Value has empty MutiAssets
+--   5) be a member of the txoutUniv
+feeTxOut :: Reflect era => Term era (TxOutF era)
+feeTxOut = Var (V "feeTxOut" (TxOutR reify) No)
+
+-- | A TxIn, guaranteed to have
+--  1) be a member of the txinUniv
+feeTxIn :: Term era (TxIn (EraCrypto era))
+feeTxIn = Var (V "feeTxIn" TxInR No)
+
+-- | A Coin large enough to pay almost any fee.
+--   See also 'feeOutput' which is related.
+bigCoin :: Term era Coin
+bigCoin = Var (V "bigCoin" CoinR No)
 
 datumsUniv :: Era era => Term era [Datum era]
 datumsUniv = Var (V "datumsUniv" (ListR DatumR) No)
 
-multiAssetUniv :: Term era [MultiAsset (EraCrypto era)]
+multiAssetUniv :: Era era => Term era [MultiAsset (EraCrypto era)]
 multiAssetUniv = Var (V "multiAssetUniv" (ListR MultiAssetR) No)
 
 -- | The universe of key hashes, and the signing and validating key pairs they represent.
@@ -930,7 +958,7 @@ ttl = Var $ V "ttl" SlotNoR No
 validityInterval :: Term era ValidityInterval
 validityInterval = Var $ V "validityInterval" ValidityIntervalR No
 
-mint :: Term era (MultiAsset (EraCrypto era))
+mint :: Era era => Term era (MultiAsset (EraCrypto era))
 mint = Var $ V "mint" MultiAssetR No
 
 reqSignerHashes :: Term era (Set (KeyHash 'Witness (EraCrypto era)))

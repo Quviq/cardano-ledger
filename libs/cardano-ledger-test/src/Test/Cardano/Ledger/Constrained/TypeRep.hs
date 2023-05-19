@@ -35,6 +35,7 @@ module Test.Cardano.Ledger.Constrained.TypeRep (
   stringR,
   hasOrd,
   hasEq,
+  format,
 )
 where
 
@@ -43,11 +44,12 @@ import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (ExUnits, Tag)
 import Cardano.Ledger.Alonzo.Scripts.Data (Data (..), Datum (..), dataToBinaryData)
 import Cardano.Ledger.Alonzo.TxWits (RdmrPtr (..))
-import Cardano.Ledger.BaseTypes (EpochNo (..), Network (..), ProtVer (..), SlotNo (..))
+import Cardano.Ledger.BaseTypes (EpochNo (..), Network (..), ProtVer (..), SlotNo (..), mkTxIxPartial)
 import Cardano.Ledger.Binary.Version (Version)
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Credential (Credential, Ptr)
+import Cardano.Ledger.Crypto (Crypto)
 import Cardano.Ledger.EpochBoundary (SnapShots (..))
 import Cardano.Ledger.Era (Era (EraCrypto))
 import Cardano.Ledger.Hashes (DataHash, ScriptHash (..))
@@ -55,7 +57,7 @@ import Cardano.Ledger.Keys (GenDelegPair (..), KeyHash, KeyRole (..))
 import Cardano.Ledger.Mary.Value (AssetName (..), MultiAsset (..), PolicyID (..))
 import Cardano.Ledger.PoolDistr (IndividualPoolStake (..))
 import Cardano.Ledger.PoolParams (PoolParams (ppId))
-import Cardano.Ledger.Pretty (PDoc, ppInteger, ppRecord', ppString)
+import Cardano.Ledger.Pretty (PDoc, ppInteger, ppList, ppMap, ppMaybe, ppRecord', ppSet, ppString)
 import Cardano.Ledger.Pretty.Alonzo (ppRdmrPtr)
 import Cardano.Ledger.Pretty.Mary (ppValidityInterval)
 
@@ -63,7 +65,7 @@ import Cardano.Ledger.Conway.TxCert (ConwayTxCert (..))
 import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.Shelley.Rewards (Reward (..))
 import Cardano.Ledger.Shelley.TxCert (MIRPot (..), ShelleyTxCert (..))
-import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Ledger.TxIn (TxIn (..))
 import Cardano.Ledger.UTxO (UTxO (..))
 import Cardano.Ledger.Val (Val ((<+>)))
 import qualified Data.List as List
@@ -73,7 +75,7 @@ import Data.Maybe
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Universe (Eql, Shape (..), Shaped (..), Singleton (..), cmpIndex, (:~:) (Refl))
-import Data.Word (Word64)
+import Data.Word (Word16, Word64)
 import Lens.Micro
 import Numeric.Natural (Natural)
 import Prettyprinter (hsep)
@@ -181,7 +183,7 @@ data Rep era t where
   MaybeR :: Rep era t -> Rep era (Maybe t)
   SlotNoR :: Rep era SlotNo
   SizeR :: Rep era Size
-  MultiAssetR :: Rep era (MultiAsset (EraCrypto era))
+  MultiAssetR :: Crypto (EraCrypto era) => Rep era (MultiAsset (EraCrypto era))
   PolicyIDR :: Rep era (PolicyID (EraCrypto era))
   WitnessesFieldR :: Proof era -> Rep era (WitnessesField era)
   AssetNameR :: Rep era AssetName
@@ -456,22 +458,23 @@ synSum (MapR _ Word64R) m = ", sum = " ++ show (Map.foldl' (+) 0 m)
 synSum (MapR _ IPoolStakeR) m = ", sum = " ++ show (Map.foldl' accum 0 m)
   where
     accum z (IndividualPoolStake rat _) = z + rat
-synSum (MapR _ (TxOutR proof)) m = ", sum = " ++ show (Map.foldl' (accum proof) (Coin 0) m)
-  where
-    accum :: Proof era -> Coin -> TxOutF era -> Coin
-    accum (Shelley _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
-    accum (Allegra _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
-    accum (Mary _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
-    accum (Alonzo _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
-    accum (Babbage _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
-    accum (Conway _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
+synSum (MapR _ (TxOutR proof)) m = ", sum = " ++ show (Map.foldl' (accumTxOut proof) (Coin 0) m)
 synSum (SetR CoinR) m = ", sum = " ++ show (pcCoin (Set.foldl' (<>) mempty m))
 synSum (SetR RationalR) m = ", sum = " ++ show (Set.foldl' (+) 0 m)
 synSum (ListR CoinR) m = ", sum = " ++ show (List.foldl' (<>) mempty m)
 synSum (ListR RationalR) m = ", sum = " ++ show (List.foldl' (+) 0 m)
 synSum (ListR IntR) m = ", sum = " ++ show (List.foldl' (+) 0 m)
 synSum (ListR Word64R) m = ", sum = " ++ show (List.foldl' (+) 0 m)
+synSum (ListR (TxOutR proof)) m = ", sum = " ++ show (List.foldl' (accumTxOut proof) (Coin 0) m)
 synSum _ _ = ""
+
+accumTxOut :: Proof era -> Coin -> TxOutF era -> Coin
+accumTxOut (Shelley _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
+accumTxOut (Allegra _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
+accumTxOut (Mary _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
+accumTxOut (Alonzo _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
+accumTxOut (Babbage _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
+accumTxOut (Conway _) z (TxOutF _ out) = z <+> (out ^. Core.coinTxOutL)
 
 -- ==================================================
 
@@ -572,7 +575,7 @@ genSizedRep _ Word64R = choose (0, 1000)
 genSizedRep _ IntR = arbitrary
 genSizedRep _ NaturalR = arbitrary
 genSizedRep _ FloatR = arbitrary
-genSizedRep _ TxInR = arbitrary
+genSizedRep n TxInR = TxIn <$> arbitrary <*> pure (mkTxIxPartial (fromIntegral (min n (fromIntegral (maxBound :: Word16)))))
 genSizedRep _ CharR = arbitrary
 genSizedRep _ (ValueR p) = genValue p
 genSizedRep _ (TxOutR p) = genTxOut p
@@ -785,15 +788,13 @@ hasOrd rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
     help FloatR i = pure $ With i
     help TxInR t = pure $ With t
     help CharR s = pure $ With s
-    help (ValueR (Shelley _)) v = pure $ With v
-    help (ValueR (Allegra _)) v = pure $ With v
     help UnitR v = pure $ With v
     help (PairR a b) p = do
       With _ <- help a undefined
       With _ <- help b undefined
       pure $ With p
-    help (ValueR _) _ = failT ["Value does not have Ord instance in post Allegra eras"]
-    help (TxOutR _) _ = failT ["TxOut does not have Ord instance"]
+    help (ValueR _) v = pure $ With v
+    help (TxOutR _) v = pure $ With v
     help (UTxOR _) _ = failT ["UTxO does not have Ord instance"]
     help DeltaCoinR v = pure $ With v
     help GenDelegPairR v = pure $ With v
@@ -814,7 +815,7 @@ hasOrd rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
     help SizeR v = pure $ With v
     help VCredR v = pure $ With v
     help VHashR v = pure $ With v
-    help MultiAssetR _ = failT ["MultiAsset does not have Ord instance"]
+    help MultiAssetR v = pure $ With v
     help PolicyIDR v = pure $ With v
     help (WitnessesFieldR _) _ = failT ["WitnessesField does not have Ord instance"]
     help AssetNameR v = pure $ With v
@@ -846,3 +847,13 @@ hasEq rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
     help x v = do
       With y <- hasOrd x v
       pure (With y)
+
+format :: Rep era t -> t -> String
+format rep@(MapR d r) x = show (ppMap (syn d) (syn r) x) ++ synSum rep x
+format rep@(ListR d) x = show (ppList (syn d) x) ++ synSum rep x
+format rep@(SetR d) x = show (ppSet (syn d) x) ++ synSum rep x
+format (MaybeR d) x = show (ppMaybe (syn d) x)
+format r x = synopsis r x
+
+syn :: Rep era t -> t -> PDoc
+syn d x = ppString (format d x)

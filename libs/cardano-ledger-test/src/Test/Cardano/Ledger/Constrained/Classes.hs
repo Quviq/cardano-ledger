@@ -8,6 +8,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Test.Cardano.Ledger.Constrained.Classes where
 
@@ -32,7 +33,13 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe.Strict (StrictMaybe (SJust))
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Universe (Singleton (..), (:~:) (Refl))
+
+-- import Data.Universe (Singleton (..), (:~:) (Refl))
+
+import Cardano.Ledger.Alonzo.TxOut (AlonzoTxOut (..))
+import Cardano.Ledger.Babbage.TxOut (BabbageTxOut (..))
+import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..))
+import Cardano.Ledger.Shelley.TxOut (ShelleyTxOut (..))
 import Data.Word (Word64)
 import GHC.Real (denominator, numerator, (%))
 import Lens.Micro
@@ -46,11 +53,9 @@ import Test.Cardano.Ledger.Conway.Arbitrary ()
 import Test.Cardano.Ledger.Core.Arbitrary ()
 import Test.Cardano.Ledger.Generic.PrettyCore (pcScript, pcTxCert, pcTxOut, pcVal)
 import Test.Cardano.Ledger.Generic.Proof (
-  AllegraEra,
   GoodCrypto,
   Proof (..),
   Reflect (..),
-  ShelleyEra,
   unReflect,
  )
 import Test.Cardano.Ledger.Shelley.Constants (defaultConstants)
@@ -65,6 +70,8 @@ import Test.QuickCheck (
   shuffle,
   vectorOf,
  )
+
+-- import Debug.Trace
 
 -- import Test.Cardano.Ledger.Generic.GenState(genScript,small,runGenRS,GenRS,elementsT,GenState(..))
 -- import Cardano.Ledger.Alonzo.Scripts(Tag(..))
@@ -388,15 +395,21 @@ unTxOut :: TxOutF era -> TxOut era
 unTxOut (TxOutF _ x) = x
 
 instance Eq (TxOutF era) where
-  TxOutF p1 x1 == TxOutF p2 x2 = case testEql p1 p2 of
-    Just Refl -> case p1 of
-      Shelley _ -> x1 == x2
-      Allegra _ -> x1 == x2
-      Mary _ -> x1 == x2
-      Alonzo _ -> x1 == x2
-      Babbage _ -> x1 == x2
-      Conway _ -> x1 == x2
-    Nothing -> False
+  x1 == x2 = compare x1 x2 == EQ
+
+instance Ord (TxOutF era) where
+  compare (TxOutF (Shelley _) (ShelleyTxOut a1 v1)) (TxOutF (Shelley _) (ShelleyTxOut a2 v2)) =
+    compare a1 a2 <> compare v1 v2
+  compare (TxOutF (Allegra _) (ShelleyTxOut a1 v1)) (TxOutF (Allegra _) (ShelleyTxOut a2 v2)) =
+    compare (a1, v1) (a2, v2)
+  compare (TxOutF (Mary _) (ShelleyTxOut a1 v1)) (TxOutF (Mary _) (ShelleyTxOut a2 v2)) =
+    compare (a1, v1) (a2, v2)
+  compare (TxOutF (Alonzo _) (AlonzoTxOut a1 v1 d1)) (TxOutF (Alonzo _) (AlonzoTxOut a2 v2 d2)) =
+    compare (a1, v1, d1) (a2, v2, d2)
+  compare (TxOutF (Babbage _) (BabbageTxOut a1 v1 d1 x1)) (TxOutF (Babbage _) (BabbageTxOut a2 v2 d2 x2)) =
+    compare (a1, v1, d1, fmap hashScript x1) (a2, v2, d2, fmap hashScript x2)
+  compare (TxOutF (Conway _) (BabbageTxOut a1 v1 d1 x1)) (TxOutF (Conway _) (BabbageTxOut a2 v2 d2 x2)) =
+    compare (a1, v1, d1, fmap hashScript x1) (a2, v2, d2, fmap hashScript x2)
 
 -- ======
 data ValueF era where
@@ -405,19 +418,22 @@ data ValueF era where
 unValue :: ValueF era -> Value era
 unValue (ValueF _ v) = v
 
-instance Ord (ValueF (ShelleyEra c)) where
-  compare (ValueF _ coin1) (ValueF _ coin2) = compare coin1 coin2
+instance Crypto c => Ord (MaryValue c) where
+  compare (MaryValue c1 m1) (MaryValue c2 m2) = compare (c1, m1) (c2, m2)
 
-instance Ord (ValueF (AllegraEra c)) where
-  compare (ValueF _ coin1) (ValueF _ coin2) = compare coin1 coin2
+instance Crypto c => Ord (MultiAsset c) where
+  compare (MultiAsset m1) (MultiAsset m2) = compare m1 m2
 
 instance Eq (ValueF era) where
-  (ValueF (Shelley _) x) == (ValueF (Shelley _) y) = x == y
-  (ValueF (Allegra _) x) == (ValueF (Allegra _) y) = x == y
-  (ValueF (Mary _) x) == (ValueF (Mary _) y) = x == y
-  (ValueF (Alonzo _) x) == (ValueF (Alonzo _) y) = x == y
-  (ValueF (Babbage _) x) == (ValueF (Babbage _) y) = x == y
-  (ValueF (Conway _) x) == (ValueF (Conway _) y) = x == y
+  x == y = compare x y == EQ
+
+instance Ord (ValueF era) where
+  (ValueF (Shelley _) x) `compare` (ValueF (Shelley _) y) = compare x y
+  (ValueF (Allegra _) x) `compare` (ValueF (Allegra _) y) = compare x y
+  (ValueF (Mary _) (MaryValue c1 m1)) `compare` (ValueF (Mary _) (MaryValue c2 m2)) = compare c1 c2 <> compare m1 m2
+  (ValueF (Alonzo _) (MaryValue c1 m1)) `compare` (ValueF (Alonzo _) (MaryValue c2 m2)) = compare c1 c2 <> compare m1 m2
+  (ValueF (Babbage _) (MaryValue c1 m1)) `compare` (ValueF (Babbage _) (MaryValue c2 m2)) = compare c1 c2 <> compare m1 m2
+  (ValueF (Conway _) (MaryValue c1 m1)) `compare` (ValueF (Conway _) (MaryValue c2 m2)) = compare c1 c2 <> compare m1 m2
 
 -- ======
 data PParamsF era where

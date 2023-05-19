@@ -1004,7 +1004,18 @@ instance LiftT (MapSpec era a b) where
   dropT (Typed (Right x)) = x
 
 showMapSpec :: MapSpec era dom rng -> String
-showMapSpec (MapSpec w d p r) = sepsP ["MapSpec", show w, showRelSpec d, showPairSpec p, showRngSpec r]
+showMapSpec (MapSpec w d p r) =
+  "("
+    ++ unlines
+      [ "MapSpec"
+      , "   " ++ show w
+      , "   "
+          ++ "   "
+          ++ showRelSpec d
+      , "   " ++ showPairSpec p
+      , "   " ++ showRngSpec r
+      ]
+    ++ ")"
 showMapSpec (MapNever _) = "MapNever"
 
 mergeMapSpec :: Ord dom => MapSpec era dom rng -> MapSpec era dom rng -> MapSpec era dom rng
@@ -1048,27 +1059,30 @@ mapSpec sz1 rel pair rng =
           case (rel, pair, rng) of
             (_, PairAny, _) -> pure (MapSpec size rel pair rng)
             ((RelOper _ mustd _ _), PairSpec d r m, (RngRel (RelOper _ mustr _ _))) ->
-              requireAll
-                [
-                  ( not (Map.keysSet m `Set.isSubsetOf` mustd)
-                  ,
-                    [ "Creating " ++ show (MapSpec sz1 rel pair rng) ++ " fails."
-                    , "It has PairSpec inconsistencies. The domain of"
-                    , "   " ++ synopsis (MapR d r) m ++ " is not a subset of the of the mustSet"
-                    , "   " ++ synopsis (SetR d) mustd
+              explain
+                ("Creating " ++ show (MapSpec sz1 rel pair rng) ++ " fails.")
+                ( requireAll
+                    [
+                      ( (Map.keysSet m `Set.isSubsetOf` mustd)
+                      ,
+                        [ "It has PairSpec inconsistencies. The domain of"
+                        , "   " ++ synopsis (MapR d r) m ++ " is not a subset of the of the mustSet"
+                        , "   " ++ synopsis (SetR d) mustd
+                        , "   TEST " ++ show (Map.keysSet m `Set.isSubsetOf` mustd)
+                        ]
+                      )
+                    ,
+                      ( (Set.fromList (Map.elems m) `Set.isSubsetOf` mustr)
+                      ,
+                        [ "It has PairSpec inconsistencies. The range of"
+                        , "   " ++ synopsis (MapR d r) m ++ " is not a subset of the of the mustSet"
+                        , "   " ++ synopsis (SetR r) mustr
+                        , "   TEST " ++ show (Map.keysSet m `Set.isSubsetOf` mustd)
+                        ]
+                      )
                     ]
-                  )
-                ,
-                  ( not (Set.fromList (Map.elems m) `Set.isSubsetOf` mustr)
-                  ,
-                    [ "Creating " ++ show (MapSpec sz1 rel pair rng) ++ " fails."
-                    , "It has PairSpec inconsistencies. The range of"
-                    , "   " ++ synopsis (MapR d r) m ++ " is not a subset of the of the mustSet"
-                    , "   " ++ synopsis (SetR r) mustr
-                    ]
-                  )
-                ]
-                (pure (MapSpec size rel pair rng))
+                    (pure (MapSpec size rel pair rng))
+                )
             (_, PairSpec _d _r _m, _) ->
               failT
                 [ "Creating " ++ show (MapSpec sz1 rel pair rng) ++ " fails."

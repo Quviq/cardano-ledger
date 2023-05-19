@@ -520,9 +520,11 @@ accumdep info answer c = case c of
   SumsTo (Right _) sm _ parts -> mkDeps (List.foldl' varsOfSum Set.empty parts) (vars sm) answer
   Component (Right t) cs -> mkDeps (componentVars cs) (vars t) answer
   Component (Left t) cs -> mkDeps (vars t) (componentVars cs) answer
-  Member t cs -> mkDeps (vars t) (vars cs) answer
+  Member (Left t) cs -> mkDeps (vars t) (vars cs) answer
+  Member (Right t) cs -> mkDeps (vars cs) (vars t) answer
   NotMember t cs -> mkDeps (vars t) (vars cs) answer
-  MapMember k v m -> mkDeps (vars k) (vars v) (mkDeps (vars v) (vars m) answer)
+  MapMember k v (Left m) -> mkDeps (vars v) (vars k) (mkDeps (vars k) (vars m) answer)
+  MapMember k v (Right m) -> mkDeps (vars m) (vars k) (mkDeps (vars k) (vars v) answer)
   t :<-: ts -> mkDeps (varsOfTarget Set.empty ts) (vars t) answer
   GenFrom t ts -> mkDeps (varsOfTarget Set.empty ts) (vars t) answer
   List t cs -> mkDeps (List.foldl' varsOfTerm Set.empty cs) (vars t) answer
@@ -534,6 +536,7 @@ accumdep info answer c = case c of
       (mkDeps (vars x) (varsOfPats Set.empty [(pat, ps)]) answer)
   Choose sz x xs ->
     mkDeps (vars sz) (vars x) (mkDeps (vars x) (varsOfPairs Set.empty xs) answer)
+  SubMap left right -> mkDeps (vars left) (vars right) answer
   other -> Set.foldl' accum answer (varsOfPred Set.empty other)
     where
       accum ans v = Map.insertWith (Set.union) v Set.empty ans

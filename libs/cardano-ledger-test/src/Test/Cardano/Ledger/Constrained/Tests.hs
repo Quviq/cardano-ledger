@@ -639,6 +639,7 @@ predConstr Choose {} = "Choose"
 predConstr Maybe {} = "Maybe"
 predConstr GenFrom {} = "GenFrom"
 predConstr ForEach {} = "ForEach"
+predConstr SubMap {} = "SubMap"
 
 constraintProperty :: Maybe Int -> Bool -> [String] -> OrderInfo -> ([Pred TestEra] -> DependGraph TestEra -> Env TestEra -> Property) -> Property
 constraintProperty timeout strict whitelist info prop =

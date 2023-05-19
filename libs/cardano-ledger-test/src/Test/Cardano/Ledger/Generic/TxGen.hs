@@ -751,10 +751,11 @@ genCollateralUTxO collateralAddresses (Coin fee) utxo = do
   pure (Map.union collaterals utxo, collaterals, excessColCoin)
 
 -- | This function is used to generate the Outputs of a TxBody, It is computed by taking the
---   Outputs of the range of the domain restricted UTxO, resticted by the Inputs of the TxBody,
+--   Outputs of the range of the (UTxO resticted by the Inputs of the TxBody),
 --   as input to the function, and then making new Outputs, where the sum of the Coin is the same.
 --   This way we generate a 'balanced' TxBody (modulo fees, deposits, refunds etc. which are
---   handled separately)
+--   handled separately). The idea is to make sum(txOuts) == sum(genRecipientsFrom txouts), the
+--   sum will be the same, but the size may be different.
 genRecipientsFrom :: Reflect era => [TxOut era] -> GenRS era [TxOut era]
 genRecipientsFrom txOuts = do
   let outCount = length txOuts

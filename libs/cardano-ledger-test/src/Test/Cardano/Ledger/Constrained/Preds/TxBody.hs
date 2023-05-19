@@ -7,7 +7,7 @@
 {-# OPTIONS_GHC -Wno-unused-binds #-}
 {-# OPTIONS_GHC -Wno-unused-imports #-}
 
-module Test.Cardano.Ledger.Constrained.Preds.TxBody where
+module Test.Cardano.Ledger.Constrained.Preds.TxBodyMay17 where
 
 import Cardano.Ledger.Address (Withdrawals (..))
 import Cardano.Ledger.Api (setMinFeeTx)
@@ -21,7 +21,7 @@ import Cardano.Ledger.Conway.TxCert (
 import Cardano.Ledger.Core (EraTxBody (..), bodyTxL, coinTxOutL, feeTxBodyL)
 import Cardano.Ledger.Credential (StakeCredential)
 import Cardano.Ledger.Era (Era (EraCrypto))
-import Cardano.Ledger.Keys (KeyHash, KeyRole (..))
+import Cardano.Ledger.Keys (GenDelegs (..), KeyHash, KeyRole (..))
 import Cardano.Ledger.Pretty (PDoc, ppMap, ppSet, ppSexp)
 import Cardano.Ledger.Shelley.AdaPots (consumedTxBody, producedTxBody)
 import Cardano.Ledger.Shelley.TxCert (
@@ -51,17 +51,29 @@ import Test.Cardano.Ledger.Constrained.Solver (toolChainSub)
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.Fields (TxBodyField (..), TxField (..))
-import Test.Cardano.Ledger.Generic.PrettyCore (pcScriptHash, pcScriptPurpose, pcScriptsNeeded, pcTxBody, pcTxIn, pcTxOut)
+import Test.Cardano.Ledger.Generic.PrettyCore
+
+-- (pcScriptHash, pcScriptPurpose, pcScriptsNeeded, pcTxBody, pcTxIn, pcTxOut, pcKeyHash,pcGenDelegPair)
 import Test.Cardano.Ledger.Generic.Proof
 import Test.Cardano.Ledger.Generic.Updaters (newTx, newTxBody)
 import Test.QuickCheck
 
+import Cardano.Ledger.Address (Addr (..))
 import Cardano.Ledger.Alonzo.Tx (ScriptPurpose (..))
 import Cardano.Ledger.Alonzo.UTxO (AlonzoScriptsNeeded (..))
-import Cardano.Ledger.Core (EraTxOut (..))
+import Cardano.Ledger.Core (EraTxOut (..), Value)
+import Cardano.Ledger.Credential (Credential (..), StakeReference (..))
+import Cardano.Ledger.Mary.Value (MaryValue (..))
 import Cardano.Ledger.Shelley.LedgerState (keyCertsRefunds, totalCertsDeposits)
+import Cardano.Ledger.Shelley.Rules (witsVKeyNeeded)
 import Cardano.Ledger.Shelley.UTxO (ShelleyScriptsNeeded (..))
 import Cardano.Ledger.UTxO (EraUTxO (..), UTxO (..))
+import Cardano.Ledger.Val (Val (coin))
+import Data.List as List
+import qualified Data.Set as Set
+import Data.Word (Word16)
+import qualified Data.Word as Word
+import System.IO.Unsafe
 import Test.Cardano.Ledger.Generic.Functions (scriptsNeeded')
 
 -- =======================================================================================
@@ -122,9 +134,11 @@ getUtxoCoinT feeinput spending = Constr "getUtxoCoin" getUtxoCoin ^$ feeinput ^$
       Just (TxOutF _ txout) -> txout ^. coinTxOutL
       Nothing -> error "feeinput not in spending"
 
-getNTxOut :: Size -> [TxOutF era] -> [TxOutF era]
-getNTxOut (SzExact n) xs = take n xs
-getNTxOut x _ =
+-- outputCoinL
+getNTxOut :: Reflect era => Size -> TxOutF era -> [TxOutF era] -> [TxOutF era]
+getNTxOut (SzExact n) feeoutput outputuniv =
+  (feeoutput & outputCoinL .~ (Coin 1000000)) : take (n - 1) outputuniv
+getNTxOut x _ _ =
   error
     ( "Non (SzExact n): "
         ++ show x
@@ -134,42 +148,53 @@ getNTxOut x _ =
 -- ==============================================================
 -- Using constraints to generate a TxBody
 
-txBodyPreds :: Reflect era => Proof era -> [Pred era]
+txBodyPreds :: forall era. Reflect era => Proof era -> [Pred era]
 txBodyPreds p =
   (txOutPreds p balanceCoin (outputs p))
-    ++ [ MetaSize (SzRng 10 12) utxoSize -- must be bigger than max size of inputs and collateral
-       , Sized (Range 2 5) inputs
-       , Sized (Range 2 3) collateral
-       , Random mint -- Compute outputs that sum to 'balanceCoin'
+    ++ [ Random mint
        , Random networkID
+       , -- utxo
+         MetaSize (SzRng 9 9) utxoSize -- must be bigger than sum of (maxsize inputs 5) and (mazsize collateral 3)
        , Sized utxoSize (utxo p)
-       , utxoTxOuts :=: Elems (utxo p)
-       , utxoTxOuts :<-: (Constr "getNTxOut" getNTxOut ^$ utxoSize ^$ (txoutUniv p))
-       , Sized (Range 0 2) withdrawals
-       , Sized (Range 0 1) refInputs
+       , Member (Left feeTxOut) (Rng (utxo p))
+       , MapMember feeTxIn feeTxOut (Right (utxo p))
+       , Subset (Dom (utxo p)) txinUniv
+       , SubMap colUtxo (utxo p)
+       , -- inputs
+         Sized (Range 2 5) inputs
+       , Member (Left feeTxIn) inputs
+       , Subset inputs (Dom (utxo p))
+       , -- collateral
+         Disjoint inputs collateral
+       , Sized (Range 2 3) collateral
+       , Sized (Range 4 4) colUtxo
+       , Subset (Dom colUtxo) txinUniv
+       , Subset (Rng colUtxo) (colTxoutUniv p)
+       , Subset collateral (Dom colUtxo)
+       , Member (Left colInput) collateral -- DO we use this?
+       , colRestriction :=: Restrict collateral colUtxo
+       , SumsTo (Right (Coin 1)) sumCol EQL [ProjMap CoinR outputCoinL colRestriction]
+       , totalCol :<-: (justTarget sumCol)
+       , -- Or maybe   , GenFrom totalCol (maybeTarget ^$ sumCol)
+
+         -- withdrawals
+         Sized (Range 0 2) withdrawals
+       , Subset (ProjS getRwdCredL CredR (Dom withdrawals)) (Dom nonZeroRewards)
+       , nonZeroRewards :<-: (Constr "filter (/=0)" (Map.filter (/= (Coin 0))) ^$ rewards)
+       , -- refInputs
+         Sized (Range 0 1) refInputs
+       , Subset refInputs (Dom (utxo p))
        , Sized (Range 1 2) reqSignerHashes
        , Subset reqSignerHashes (Dom keymapUniv)
-       , Subset (Dom (utxo p)) txinUniv
-       , Subset inputs (Dom (utxo p))
-       , Subset collateral (Dom (utxo p))
-       , Disjoint inputs collateral
-       , Member feeInput inputs
-       , Member colInput collateral
-       , Subset refInputs (Dom (utxo p))
-       , spending :=: Restrict inputs (utxo p)
-       , withoutfee :<-: (Constr "filter (/= feeInput)" Map.delete ^$ feeInput ^$ spending)
-       , colUtxo :=: Restrict collateral (utxo p)
-       , SumsTo (Right (Coin 1)) sumCol EQL [ProjMap CoinR outputCoinL colUtxo]
-       , GenFrom totalCol (maybeTarget ^$ sumCol)
-       , nonZeroRewards :<-: (Constr "filter (/=0)" (Map.filter (/= (Coin 0))) ^$ rewards)
-       , Subset (ProjS getRwdCredL CredR (Dom withdrawals)) (Dom nonZeroRewards)
        , ttl :<-: (Constr "(+5)" (\x -> x + 5) ^$ currentSlot)
-       , txfee :<-: getUtxoCoinT feeInput spending
+       , txfee :<-: (constTarget (Coin 0))
+       , -- balanceCoin, used by (txOutPreds p balanceCoin (outputs p)) go generate 'outputs' that balance
+         spending :=: Restrict inputs (utxo p)
        , SumsTo
           (Right (Coin 1))
           balanceCoin
           EQL
-          [ProjMap CoinR outputCoinL withoutfee, SumMap withdrawals, One txrefunds, One txdeposits]
+          [ProjMap CoinR outputCoinL spending, SumMap withdrawals, One txrefunds, One txdeposits]
        , txrefunds :<-: (Constr "certsRefunds" certsRefunds ^$ pparams p ^$ stakeDeposits ^$ certs)
        , txdeposits :<-: (Constr "certsDeposits" certsDeposits ^$ pparams p ^$ regPools ^$ certs)
        ]
@@ -177,6 +202,7 @@ txBodyPreds p =
     spending = Var (V "spending" (MapR TxInR (TxOutR p)) No)
     withoutfee = Var (V "withoutfee" (MapR TxInR (TxOutR p)) No)
     colUtxo = Var (V "colUtxo" (MapR TxInR (TxOutR p)) No)
+    colRestriction = Var (V "colRestriction" (MapR TxInR (TxOutR p)) No)
     nonZeroRewards = var "nonZeroRewards" (MapR CredR CoinR)
     balanceCoin = Var (V "balanceCoin" CoinR No)
     certsRefunds (PParamsF _ pp) depositsx certsx = keyCertsRefunds pp (`Map.lookup` depositsx) (map unTxCertF certsx)
@@ -188,6 +214,10 @@ txBodyPreds p =
     sumCol = Var $ V "sumCol" CoinR No
     utxoSize = Var (V "utxoSize" SizeR No)
     utxoTxOuts = Var (V "utxoTxOuts" (ListR (TxOutR p)) No)
+    noScriptAddr = Var (V "noScriptAddr" (SetR AddrR) No)
+    feeInput = Var (V "feeInput" TxInR No)
+    feeAddr = Var (V "feeAddr" AddrR No)
+    colInput = var "colInput" TxInR
 
 txBodyStage ::
   Reflect era =>
@@ -196,6 +226,8 @@ txBodyStage ::
   Gen (Subst era)
 txBodyStage proof subst0 = do
   let preds = txBodyPreds proof
+  -- (_, g) <- compileGen standardOrderInfo (map (substPred subst0) preds)
+  --  trace ("GRAPH\n" ++ show g) $
   subst <- toolChainSub proof standardOrderInfo preds subst0
   (_env, status) <- monadTyped $ checkForSoundness preds subst
   case status of
@@ -204,7 +236,11 @@ txBodyStage proof subst0 = do
 
 main :: IO ()
 main = do
-  let proof = Conway Standard -- Babbage Standard
+  let proof = Conway Standard
+  -- Babbage Standard
+  -- Alonzo Standard
+  -- Mary Standard
+  -- Shelley Standard
   env0 <-
     generate
       ( pure []
@@ -221,7 +257,7 @@ main = do
   -- putStrLn (show rewritten)
 
   -- Adjust the Env for fee
-  env <- monadTyped (fixFee env0)
+  env <- pure env0 -- monadTyped (fixFee env0)
 
   -- Compute the TxBody from the fixed Env
   let txb = txBodyFromEnv proof env
@@ -233,11 +269,21 @@ main = do
   utxoV <- monadTyped (findVar (unVar (utxo proof)) env)
   putStrLn (show (producedTxBody txb ppV certState))
   putStrLn (show (consumedTxBody txb ppV certState (liftUTxO utxoV)))
-  let need = getScriptsNeeded (liftUTxO utxoV) txb
-  putStrLn (show (pcScriptsNeeded proof need))
+  let needS = getScriptsNeeded (liftUTxO utxoV) txb
+  -- putStrLn ("Needed Scripts\n"++show (pcScriptsNeeded proof needS))
+  gd <- monadTyped (findVar (unVar genDelegs) env)
+  -- putStrLn (show (ppMap pcKeyHash pcGenDelegPair gd))
+  let needK = witsVKeyNeeded (liftUTxO utxoV) (newTx proof [Body txb]) (GenDelegs gd)
+  -- putStrLn ("Needed keys\n"++show(ppSet pcKeyHash needK))
   -- enter the Repl
-  goRepl proof env ""
+  -- goRepl proof env ""
+  displayTerm env (utxo proof)
+  -- env1 <- generate (fixCollateral proof (Coin 500) env)
+  displayTerm env collateral
+  displayTerm env (var "colUtxo" (MapR TxInR (TxOutR proof)))
+  displayTerm env (var "colRestriction" (MapR TxInR (TxOutR proof)))
 
+{-
 -- ===================================================
 -- At some point we will need to move this to the Tx preds
 -- since the witnesses for Plutus scripts have Costs which
@@ -257,9 +303,6 @@ main = do
 feeInput :: Term era (TxIn (EraCrypto era))
 feeInput = var "feeInput" TxInR
 
-colInput :: Term era (TxIn (EraCrypto era))
-colInput = var "colInput" TxInR
-
 -- | Adjust the Env to get the right amout for the fee.
 --   We need to adjust the 'utxo' and the 'txfee' variables
 --   in the Env. We compute the right amount using 'setMinFeeTx'
@@ -272,7 +315,7 @@ fixFee env = do
   colTxIn <- monadTyped (findVar (unVar colInput) env)
   let actualfee = (setMinFeeTx ppV (newTx proof [Body txb])) ^. (bodyTxL . feeTxBodyL)
   utxo0 <-
-    trace ("\nTHERE\nfeeTxIn " ++ show (pcTxIn feeTxIn) ++ "\ncolTxIn" ++ show (pcTxIn colTxIn)) $
+    -- trace ("\nTHERE\nfeeTxIn " ++ show (pcTxIn feeTxIn) ++ "\ncolTxIn" ++ show (pcTxIn colTxIn)) $
       monadTyped (findVar (unVar (utxo proof)) env)
 
   let utxo1 = fixTxInput feeTxIn actualfee utxo0
@@ -321,4 +364,58 @@ witsVKeyNeeded ::
   Tx era ->
   GenDelegs (EraCrypto era) ->
   Set (KeyHash 'Witness (EraCrypto era))
+-}
+
+proof0 =  Conway Standard
+
+mkEnv =  generate
+      ( pure []
+          >>= pParamsStage proof0
+          >>= universeStage proof0
+      --    >>= vstateStage proof0
+      --    >>= pstateStage proof0
+      --    >>= dstateStage proof0
+      --    >>= certsStage proof0
+      --    >>= (\subst -> monadTyped $ substToEnv subst emptyEnv)
+      )
+
+subst0 = unsafePerformIO mkEnv
+
+preds0 = map (substPred subst0)
+       [ -- MetaSize (SzRng 8 8) utxoSize -- must be bigger than sum of (maxsize inputs) and (mazsize collateral)
+         Sized (Range 8 8) (utxo proof0)
+       , Member (Left feeTxOut) (Rng (utxo proof0))
+       , MapMember feeTxIn feeTxOut (Right (utxo proof0))
+       ]
+
+-- outputCoinL :: Reflect era => Lens' (TxOutF era) Coin
+
+{- We compute the fee, and fixup the transaction as follows
+1) Compute the needed fee (say 241)
+2) We know there is at least one input (feeTxIn) with enough money to pay the fee.
+3) We have computed a balanced TxBody
+   Produced(Outputs 2000231, Fees 0, Deposits 10) = 2000241
+   Consumed(Inputs 2000234, Refunds 0, Withdrawals 7) = 2000241
+4) We move the fee amount (241) from outputs to fee, So things still balance
+   Produced(Outputs 1999990, Fees 241, Deposits 10) = 2000241
+   Consumed(Inputs 2000234, Refunds 0, Withdrawals 7) = 2000241
+   This means changing the bindings for 'outputs' and 'txfee'
+5) We fix the collateral (which play no part in the balancing)
+   to have enough money. This means changing the bindings for 'utxo'
+   sum(collateral) >= fee * collpercent
+-}
+
+balanceMap :: Ord k => [(k,Coin)] -> Map k t -> Lens' t Coin -> Map k t
+balanceMap pairs m0 l = foldl' accum m0 pairs
+  where accum m (k,coin) = Map.adjust (\ t -> t & l .~ coin) k m
+
+fixCollateral :: Reflect era => Proof era -> Coin -> Env era -> Gen (Env era)
+fixCollateral p coin env = do
+  col <- monadTyped (findVar (unVar collateral) env)
+  u <- monadTyped (findVar (unVar (utxo p)) env)
+  let n = Set.size col
+  coins <- partitionCoin (Coin 1) [] n coin
+  let utxo' = balanceMap (zip (Set.toList col) coins) u outputCoinL
+  pure $ storeVar (unVar (utxo p)) utxo' env
+
 -}

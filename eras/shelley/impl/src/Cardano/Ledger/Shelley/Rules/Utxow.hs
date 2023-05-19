@@ -31,6 +31,7 @@ module Cardano.Ledger.Shelley.Rules.Utxow (
   validateMIRInsufficientGenesisSigs,
   validateNeededWitnesses,
   propWits,
+  witsVKeyNeeded,
 )
 where
 
