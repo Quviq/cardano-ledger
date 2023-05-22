@@ -48,7 +48,7 @@ import Test.Cardano.Ledger.Constrained.Monad (monadTyped)
 import Test.Cardano.Ledger.Constrained.Preds.Universes
 import Test.Cardano.Ledger.Constrained.Rewrite (rewriteGen, standardOrderInfo)
 import Test.Cardano.Ledger.Constrained.Size
-import Test.Cardano.Ledger.Constrained.Solver (toolChain, toolChainSub)
+import Test.Cardano.Ledger.Constrained.Solver (ToolChainStage, toolChain, toolChainSub)
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.Fields (TxBodyField (..), TxOutField (..))
@@ -196,15 +196,13 @@ txOutPreds p balanceCoin outputS =
     hash = var "hash" DataHashR
     dat = var "dat" DataR
 
+txOutStage :: Reflect era => Proof era -> ToolChainStage era
+txOutStage proof = toolChainSub standardOrderInfo (txOutPreds proof (Lit CoinR (Coin 100)) (outputs proof))
+
 main :: IO ()
 main = do
   let proof = Babbage Standard
   -- rewritten <- snd <$> generate (rewriteGen (1,(txOutPreds proof (Lit CoinR (Coin 100)) (outputs proof))))
   -- putStrLn (show rewritten)
-  env <-
-    generate
-      ( pure []
-          >>= universeStage proof
-          >>= toolChain proof standardOrderInfo (txOutPreds proof (Lit CoinR (Coin 100)) (outputs proof))
-      )
+  env <- generate $ toolChain proof [universeStage, txOutStage]
   displayTerm env (outputs proof)

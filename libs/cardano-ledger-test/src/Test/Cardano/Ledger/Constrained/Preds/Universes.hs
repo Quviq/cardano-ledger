@@ -468,7 +468,7 @@ stakeToVote = coerceKeyRole
 
 solveUniv :: Reflect era => Proof era -> Gen (Subst era)
 solveUniv proof = do
-  toolChainSub proof standardOrderInfo (universePreds proof) []
+  toolChainSub standardOrderInfo (universePreds proof) []
 
 universeStage ::
   Reflect era =>
@@ -477,7 +477,7 @@ universeStage ::
   Gen (Subst era)
 universeStage proof =
   if True
-    then toolChainSub proof standardOrderInfo (universePreds proof)
+    then toolChainSub standardOrderInfo (universePreds proof)
     else const (initUniv proof)
 
 mainUniverses :: IO ()

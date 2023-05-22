@@ -50,7 +50,7 @@ vstateStage ::
   Proof era ->
   Subst era ->
   Gen (Subst era)
-vstateStage proof = toolChainSub proof standardOrderInfo (vstatePreds proof)
+vstateStage proof = toolChainSub standardOrderInfo (vstatePreds proof)
 
 mainV :: IO ()
 mainV = do
@@ -114,7 +114,7 @@ pstateStage ::
   Proof era ->
   Subst era ->
   Gen (Subst era)
-pstateStage proof = toolChainSub proof standardOrderInfo (pstatePreds proof)
+pstateStage proof = toolChainSub standardOrderInfo (pstatePreds proof)
 
 mainP :: IO ()
 mainP = do
@@ -170,7 +170,7 @@ dstateStage ::
   Proof era ->
   Subst era ->
   Gen (Subst era)
-dstateStage proof = toolChainSub proof standardOrderInfo (dstatePreds proof)
+dstateStage proof = toolChainSub standardOrderInfo (dstatePreds proof)
 
 mainD :: IO ()
 mainD = do

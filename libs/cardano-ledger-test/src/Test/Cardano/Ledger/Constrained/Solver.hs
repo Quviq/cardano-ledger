@@ -890,18 +890,20 @@ solveOneVar subst0 (names, preds) = case (names, map (substPred subst0) preds) o
     foldlM' (\ !sub (!sumx, !x) -> genSum (substSum sub sumx) rep x sub) subst0 (zip suml zs)
   (ns, ps) -> errorMess "Not yet. multiple vars in solveOneVar" [show ns, show ps]
 
-toolChainSub :: Era era => Proof era -> OrderInfo -> [Pred era] -> Subst era -> Gen (Subst era)
-toolChainSub _proof order cs subst0 = do
+type ToolChainStage era = Subst era -> Gen (Subst era)
+type ToolChain era = [Proof era -> ToolChainStage era]
+
+toolChainSub :: Era era => OrderInfo -> [Pred era] -> ToolChainStage era
+toolChainSub order cs subst0 = do
   (_count, DependGraph pairs) <- compileGen order (map (substPredWithVarTest subst0) cs)
   subst <- foldlM' solveOneVar subst0 pairs
   let isTempV (SubItem (V k _ _) _) = not (elem '.' k)
   pure $ filter isTempV subst
 
-toolChain :: Era era => Proof era -> OrderInfo -> [Pred era] -> Subst era -> Gen (Env era)
-toolChain _proof order cs subst0 = do
-  (_count, DependGraph pairs) <- compileGen order (map (substPredWithVarTest subst0) cs)
-  subst <- foldlM' solveOneVar subst0 pairs
-  monadTyped $ substToEnv subst emptyEnv
+toolChain :: Proof era -> ToolChain era -> Gen (Env era)
+toolChain proof stages =
+  foldl (>>=) (pure []) (map ($ proof) stages) >>= \subst ->
+    monadTyped (substToEnv subst emptyEnv)
 
 -- InitUniv p >>= (toolChainSub p _ _ _)  >>= (toolChainSub p _ _ _) >>= (toolChain p _ _)
 -- =======================================================================

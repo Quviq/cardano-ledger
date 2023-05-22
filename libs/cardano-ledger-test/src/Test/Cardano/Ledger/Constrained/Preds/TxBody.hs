@@ -7,7 +7,7 @@
 {-# OPTIONS_GHC -Wno-unused-binds #-}
 {-# OPTIONS_GHC -Wno-unused-imports #-}
 
-module Test.Cardano.Ledger.Constrained.Preds.TxBodyMay17 where
+module Test.Cardano.Ledger.Constrained.Preds.TxBody where
 
 import Cardano.Ledger.Address (Withdrawals (..))
 import Cardano.Ledger.Api (setMinFeeTx)
@@ -47,7 +47,7 @@ import Test.Cardano.Ledger.Constrained.Preds.TxOut (txOutPreds)
 import Test.Cardano.Ledger.Constrained.Preds.Universes
 import Test.Cardano.Ledger.Constrained.Rewrite
 import Test.Cardano.Ledger.Constrained.Size (OrdCond (..), Size (..))
-import Test.Cardano.Ledger.Constrained.Solver (toolChainSub)
+import Test.Cardano.Ledger.Constrained.Solver (toolChain, toolChainSub)
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.Fields (TxBodyField (..), TxField (..))
@@ -228,7 +228,7 @@ txBodyStage proof subst0 = do
   let preds = txBodyPreds proof
   -- (_, g) <- compileGen standardOrderInfo (map (substPred subst0) preds)
   --  trace ("GRAPH\n" ++ show g) $
-  subst <- toolChainSub proof standardOrderInfo preds subst0
+  subst <- toolChainSub standardOrderInfo preds subst0
   (_env, status) <- monadTyped $ checkForSoundness preds subst
   case status of
     Nothing -> pure subst
@@ -243,15 +243,16 @@ main = do
   -- Shelley Standard
   env0 <-
     generate
-      ( pure []
-          >>= pParamsStage proof
-          >>= universeStage proof
-          >>= vstateStage proof
-          >>= pstateStage proof
-          >>= dstateStage proof
-          >>= certsStage proof
-          >>= txBodyStage proof
-          >>= (\subst -> monadTyped $ substToEnv subst emptyEnv)
+      ( toolChain
+          proof
+          [ pParamsStage
+          , universeStage
+          , vstateStage
+          , pstateStage
+          , dstateStage
+          , certsStage
+          , txBodyStage
+          ]
       )
   -- rewritten <- snd <$> generate (rewriteGen (1, txBodyPreds proof))
   -- putStrLn (show rewritten)

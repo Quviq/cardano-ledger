@@ -99,7 +99,7 @@ pParamsStage ::
   Proof era ->
   Subst era ->
   Gen (Subst era)
-pParamsStage proof = toolChainSub proof standardOrderInfo (pParamsPreds proof)
+pParamsStage proof = toolChainSub standardOrderInfo (pParamsPreds proof)
 
 mainPParams :: IO ()
 mainPParams = do

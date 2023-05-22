@@ -37,7 +37,7 @@ import Test.Cardano.Ledger.Constrained.Preds.PParams (pParamsStage)
 import Test.Cardano.Ledger.Constrained.Preds.Repl (goRepl)
 import Test.Cardano.Ledger.Constrained.Preds.Universes
 import Test.Cardano.Ledger.Constrained.Rewrite
-import Test.Cardano.Ledger.Constrained.Solver (toolChainSub)
+import Test.Cardano.Ledger.Constrained.Solver (toolChain, toolChainSub)
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.PrettyCore (pcTxCert)
@@ -240,7 +240,7 @@ certsStage ::
   Gen (Subst era)
 certsStage proof subst0 = do
   let preds = certsPreds proof
-  toolChainSub proof standardOrderInfo preds subst0
+  toolChainSub standardOrderInfo preds subst0
 
 main :: IO ()
 main = do
@@ -248,14 +248,15 @@ main = do
   -- Babbage Standard
   env <-
     generate
-      ( pure []
-          >>= pParamsStage proof
-          >>= universeStage proof
-          >>= vstateStage proof
-          >>= pstateStage proof
-          >>= dstateStage proof
-          >>= certsStage proof
-          >>= (\subst -> monadTyped (substToEnv subst emptyEnv))
+      ( toolChain
+          proof
+          [ pParamsStage
+          , universeStage
+          , vstateStage
+          , pstateStage
+          , dstateStage
+          , certsStage
+          ]
       )
   -- rewritten <- snd <$> generate (rewriteGen (1,  certsPreds proof))
   -- putStrLn (show rewritten)
