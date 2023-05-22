@@ -69,7 +69,7 @@ import Cardano.Ledger.Shelley.Rules (witsVKeyNeeded)
 import Cardano.Ledger.Shelley.UTxO (ShelleyScriptsNeeded (..))
 import Cardano.Ledger.UTxO (EraUTxO (..), UTxO (..))
 import Cardano.Ledger.Val (Val (coin))
-import Data.List as List
+import qualified Data.List as List
 import qualified Data.Set as Set
 import Data.Word (Word16)
 import qualified Data.Word as Word
