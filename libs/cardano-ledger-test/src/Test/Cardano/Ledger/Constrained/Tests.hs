@@ -700,7 +700,7 @@ constraintProperty timeout strict whitelist info prop =
         ==> counterexample (unlines errs) False
     checkWhitelist (Right x) k = property $ k x
 
-checkPredicates :: [Pred TestEra] -> Env TestEra -> Property
+checkPredicates :: [Pred era] -> Env era -> Property
 checkPredicates preds env =
   counterexample ("-- Solution --\n" ++ showEnv env) $
     conjoin $
