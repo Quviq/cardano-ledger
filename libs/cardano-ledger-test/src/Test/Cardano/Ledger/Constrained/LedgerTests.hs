@@ -12,21 +12,21 @@ import Test.Cardano.Ledger.Constrained.Env
 -- import Cardano.Ledger.Coin
 -- import Cardano.Ledger.Shelley
 import Cardano.Ledger.Era (Era)
-import Cardano.Ledger.Shelley.LedgerState
+import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Test.Cardano.Ledger.Constrained.Classes
 import Test.Cardano.Ledger.Constrained.Monad
 import Test.Cardano.Ledger.Constrained.Size
 import Test.Cardano.Ledger.Constrained.Rewrite
 import Test.Cardano.Ledger.Constrained.Tests (checkPredicates)
 
--- import Test.Cardano.Ledger.Constrained.Shrink
+import Test.Cardano.Ledger.Constrained.Shrink
 
 import Test.Cardano.Ledger.Constrained.Examples (univPreds, pstatePreds, dstatePreds, utxostatePreds, accountstatePreds,
                                                  epochstatePreds, newepochstatePreds, runTarget)
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
-import Test.Cardano.Ledger.Generic.Proof (Reflect (..), ConwayEra, Standard)
+import Test.Cardano.Ledger.Generic.Proof (Reflect (..), ConwayEra, ShelleyEra, Standard)
 import Test.QuickCheck hiding (getSize, total)
 
 genFromConstraints :: Era era => Proof era -> OrderInfo -> [Pred era] -> Target era t -> Gen t
@@ -39,22 +39,12 @@ genFromConstraints proof order cs target = do
       env <- monadTyped $ substToEnv subst emptyEnv
       monadTyped (runTarget env target)
 
-newepochConstraints :: Reflect era => Proof era -> [Pred era]
-newepochConstraints pr =
-  pstatePreds pr
-  ++ dstatePreds pr
-  ++ utxostatePreds pr
-  ++ accountstatePreds pr
-  ++ epochstatePreds pr
-  ++ newepochstatePreds pr
-
-genNewEpochState :: Reflect era => Proof era -> Gen (NewEpochState era)
-genNewEpochState proof =
-  genFromConstraints
-    proof
-    standardOrderInfo {sumBeforeParts = False}
-    (univPreds proof ++ newepochConstraints proof)
-    (newEpochStateT proof)
+shrinkFromConstraints :: Era era => Rep era t -> OrderInfo -> [Pred era] -> Target era t -> t -> [t]
+shrinkFromConstraints rep order cs target val = do
+  let env = saturateEnv (unTarget rep target val) cs
+  graph <- monadTyped $ compile order $ rewrite cs
+  env'  <- shrinkEnv graph env
+  monadTyped $ runTarget env' target
 
 unTarget :: Era era => Rep era t -> Target era t -> t -> Env era
 unTarget rep target v =
@@ -63,17 +53,6 @@ unTarget rep target v =
                        , Just Refl <- [testEql rep rep']
                        ]
   where names = Set.toList $ varsOfTarget mempty target
-
-type TestEra = ConwayEra Standard
-
-testProof :: Proof TestEra
-testProof = Conway Standard
-
-prop_newEpochState :: Property
-prop_newEpochState = forAll (genNewEpochState testProof) $ \ st ->
-  let env   = unTarget NewEpochStateR (newEpochStateT testProof) st
-      preds = newepochConstraints testProof in
-  checkPredicates preds (saturateEnv env preds)
 
 -- | Add variables to the environment that are uniquely determined by the constraints.
 saturateEnv :: Era era => Env era -> [Pred era] -> Env era
@@ -108,4 +87,80 @@ solveUnknown env p = case p of
   where
     known   = isJust . flip findName env
     unknown = not . known
+
+-- NewEpochState generator ------------------------------------------------
+
+randoms :: Proof era -> [Pred era]
+randoms p =
+  [ Random poolDistr
+  , Random regPools
+  , Random retiring
+  , Random futureRegPools
+  , Random poolDeposits
+  , Random prevBlocksMade
+  , Random currBlocksMade
+  , Random markPools
+  , Random markPoolDistr
+  , Random setPools
+  , Random goPools
+  , Random stakeDeposits
+  , Random delegations
+  , Random rewards
+  , Random markStake
+  , Random markDelegs
+  , Random setStake
+  , Random setDelegs
+  , Random goStake
+  , Random goDelegs
+  , Random instanReserves
+  , Random instanTreasury
+  , Random (proposalsT p)
+  , Random (futureProposalsT p)
+  , Random genDelegs
+  , Random (utxo p)
+  ]
+
+newepochConstraints :: Reflect era => Proof era -> [Pred era]
+newepochConstraints pr =
+  randoms pr
+  ++ pstatePreds pr
+  ++ dstatePreds pr
+  ++ utxostatePreds pr
+  ++ accountstatePreds pr
+  ++ epochstatePreds pr
+  ++ newepochstatePreds pr
+
+genNewEpochState :: Reflect era => Proof era -> Gen (NewEpochState era)
+genNewEpochState proof =
+  genFromConstraints
+    proof
+    standardOrderInfo {sumBeforeParts = False}
+    (univPreds proof ++ newepochConstraints proof)
+    (newEpochStateT proof)
+
+shrinkNewEpochState :: Reflect era => Proof era -> NewEpochState era -> [NewEpochState era]
+shrinkNewEpochState proof st =
+  shrinkFromConstraints
+    NewEpochStateR
+    standardOrderInfo
+    (newepochConstraints proof)
+    (newEpochStateT proof)
+    st
+
+-- Property ---------------------------------------------------------------
+
+type TestEra = ShelleyEra Standard
+
+testProof :: Proof TestEra
+testProof = Shelley Standard
+
+prop_newEpochState :: Property
+prop_newEpochState = forAllShrinkBlind (genNewEpochState testProof) (shrinkNewEpochState testProof) $ \ st ->
+  validEpochState st .&&. conjoin (map validEpochState $ shrinkNewEpochState testProof st)
+
+validEpochState :: NewEpochState TestEra -> Property
+validEpochState st = checkPredicates preds (saturateEnv env preds)
+  where
+    env   = unTarget NewEpochStateR (newEpochStateT testProof) st
+    preds = newepochConstraints testProof
 
