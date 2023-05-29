@@ -178,26 +178,26 @@ isCountType rep = case hasCount rep rep of
 -- ==================================================
 -- Extras, simple helper functions
 
-sameRep :: Rep era i -> Rep era j -> Typed (i :~: j)
+sameRep :: Era era => Rep era i -> Rep era j -> Typed (i :~: j)
 sameRep r1 r2 = case testEql r1 r2 of
   Just x -> pure x
   Nothing -> failT ["Type error in sameRep:\n  " ++ show r1 ++ " =/=\n  " ++ show r2]
 
 -- | Simplify and return with evidence that 'expr' has type 's'
-simplifyAtType :: Rep era s -> Term era t -> Typed s
+simplifyAtType :: Era era => Rep era s -> Term era t -> Typed s
 simplifyAtType r1 term = do
   t <- simplify term
   Refl <- sameRep r1 (termRep term)
   pure t
 
-simplifySet :: Ord rng => Rep era rng -> Term era y -> Typed (HasConstraint Ord (Set rng))
+simplifySet :: (Ord rng, Era era) => Rep era rng -> Term era y -> Typed (HasConstraint Ord (Set rng))
 simplifySet r1 term = do
   x <- simplify term
   Refl <- sameRep (SetR r1) (termRep term)
   pure (With x)
 
 -- | Is the Sum a variable (of a map). Only SumMap and Project store maps.
-isMapVar :: Name era -> Sum era c -> Bool
+isMapVar :: Era era => Name era -> Sum era c -> Bool
 isMapVar n1 (SumMap (Var v2)) = n1 == Name v2
 isMapVar n1 (Project _ (Var v2)) = n1 == Name v2
 isMapVar _ _ = False
@@ -325,7 +325,7 @@ solveMap v1@(V _ r@(MapR dom rng) _) predicate = explain msg $ case predicate of
 --   That can only happen in a (RngSum cond c) or a (RngProj cond rep c) constructor of 'Sum'
 --   Because we don't know if 'c' can have negative values, we do the summation as an Integer
 solveMapSummands ::
-  Adds c =>
+  (Adds c, Era era) =>
   c ->
   c ->
   [String] ->
@@ -361,7 +361,7 @@ solveMaps v@(V _ (MapR _ _) _) cs =
 
 -- | Given a variable: 'v1', with a Set type, compute a SetSpec
 --   which describes the constraints implied by the Pred 'predicate'
-solveSet :: V era (Set a) -> Pred era -> Typed (SetSpec era a)
+solveSet :: Era era => V era (Set a) -> Pred era -> Typed (SetSpec era a)
 solveSet v1@(V _ (SetR r) _) predicate = case predicate of
   (Sized (Size sz) (Var v2)) | Name v1 == Name v2 -> setSpec sz RelAny
   (Var v2 :=: expr) | Name v1 == Name v2 -> do
@@ -381,7 +381,7 @@ solveSet v1@(V _ (SetR r) _) predicate = case predicate of
   (Random (Var v2)) | Name v1 == Name v2 -> setSpec SzAny RelAny
   cond -> failT ["Can't solveSet " ++ show cond ++ " for variable " ++ show v1]
 
-solveSets :: V era (Set a) -> [Pred era] -> Typed (SetSpec era a)
+solveSets :: Era era => V era (Set a) -> [Pred era] -> Typed (SetSpec era a)
 solveSets v@(V nm (SetR _) _) cs =
   explain ("\nSolving for " ++ nm ++ ", Set Predicates\n" ++ unlines (map (("  " ++) . show) cs)) $
     foldlM' accum mempty cs
@@ -393,7 +393,7 @@ solveSets v@(V nm (SetR _) _) cs =
 -- ========================================================
 -- Solving for variables with an Adds instance
 
-solveSum :: Adds t => V era t -> Pred era -> Typed (AddsSpec t)
+solveSum :: (Adds t, Era era) => V era t -> Pred era -> Typed (AddsSpec t)
 solveSum v1@(V nam r _) predx =
   case predx of
     (Sized expr (Var v2@(V nm _ _))) | Name v1 == Name v2 -> do
@@ -453,7 +453,7 @@ solveSum v1@(V nam r _) predx =
         other -> failT [show predx, show other ++ " should be either Coin or DeltaCoin"]
     other -> failT ["Can't solveSum " ++ show (Name v1) ++ " = " ++ show other]
 
-solveSums :: Adds t => V era t -> [Pred era] -> Typed (AddsSpec t)
+solveSums :: (Adds t, Era era) => V era t -> [Pred era] -> Typed (AddsSpec t)
 solveSums v@(V nm r _) cs =
   explain ("\nGiven (Add " ++ show r ++ "), Solving for " ++ nm ++ " :: " ++ show r ++ ",  with Predicates \n" ++ unlines (map (("  " ++) . show) cs)) $
     foldlM' accum mempty cs
@@ -473,17 +473,17 @@ summandAsInt (SumList (Lit _ m)) = pure (toI (List.foldl' add zero m))
 summandAsInt (Project _ (Lit _ m)) = pure (toI (List.foldl' (\ans x -> add ans (getSum x)) zero m))
 summandAsInt x = failT ["Can't compute summandAsInt: " ++ show x ++ ", to an Int."]
 
-summandsAsInt :: Adds c => [Sum era c] -> Typed Int
+summandsAsInt :: (Adds c, Era era) => [Sum era c] -> Typed Int
 summandsAsInt [] = pure 0
 summandsAsInt (x : xs) = do
   n <- summandAsInt x
   m <- summandsAsInt xs
   pure (m + n)
 
-sameV :: V era s -> V era t -> Typed (s :~: t)
+sameV :: Era era => V era s -> V era t -> Typed (s :~: t)
 sameV (V _ r1 _) (V _ r2 _) = sameRep r1 r2
 
-unique2 :: Adds c => V era t -> (Int, Bool, [Name era]) -> Sum era c -> Typed (Int, Bool, [Name era])
+unique2 :: (Adds c, Era era) => V era t -> (Int, Bool, [Name era]) -> Sum era c -> Typed (Int, Bool, [Name era])
 unique2 v1 (c, b, ns) (One (Var v2)) =
   if Name v1 == Name v2
     then pure (c, b, Name v2 : ns)
@@ -501,7 +501,7 @@ unique2 _ (c1, b, ns) sumexpr = do c2 <- summandAsInt sumexpr; pure (c1 + c2, b,
 -- | Check that there is exactly 1 occurence of 'v',
 --   and return the sum of the other terms in 'ss'
 --   which should all be constants.
-intSumWithUniqueV :: Adds c => V era t -> [Sum era c] -> Typed (Int, Bool)
+intSumWithUniqueV :: (Adds c, Era era) => V era t -> [Sum era c] -> Typed (Int, Bool)
 intSumWithUniqueV v@(V nam _ _) ss = do
   (c, b, ns) <- foldlM' (unique2 v) (0, False, []) ss
   case ns of
@@ -543,7 +543,7 @@ update :: t -> [Update t] -> t
 update t [] = t
 update t (Update s l : more) = update (Lens.set l s t) more
 
-anyToUpdate :: Rep era t1 -> (AnyF era t2) -> Typed (Update t1)
+anyToUpdate :: Era era => Rep era t1 -> (AnyF era t2) -> Typed (Update t1)
 anyToUpdate rep1 (AnyF (FConst _ s (Yes rep2 l))) = do
   Refl <- sameRep rep1 rep2
   pure (Update s l)

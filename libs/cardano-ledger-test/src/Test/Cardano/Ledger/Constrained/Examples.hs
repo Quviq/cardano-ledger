@@ -38,13 +38,13 @@ import Test.Cardano.Ledger.Constrained.Tests (prop_shrinking, prop_soundness)
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.PrettyCore (PrettyC (..))
-import Test.Cardano.Ledger.Generic.Proof (Reflect (..), Standard)
+import Test.Cardano.Ledger.Generic.Proof (Reflect (..), Standard, ShelleyEra)
 import Test.Hspec (shouldThrow)
 import Test.QuickCheck hiding (Fixed, total)
 
 -- ===========================================
 
-runCompile :: [Pred era] -> IO ()
+runCompile :: Era era => [Pred era] -> IO ()
 runCompile cs = case runTyped (compile standardOrderInfo cs) of
   Right x -> print x
   Left xs -> putStrLn (unlines xs)
@@ -53,7 +53,7 @@ data Assembler era where
   Assemble :: PrettyC t era => Target era t -> Assembler era
   Skip :: Assembler era
 
-runTarget :: Env era -> Target era t -> Typed t
+runTarget :: Era era => Env era -> Target era t -> Typed t
 runTarget _ (Constr _ c) = pure c
 runTarget env (Simple e) = runTerm env e
 runTarget env (f :$ x) = do
@@ -64,7 +64,7 @@ runTarget env (f :$ x) = do
 stoi :: OrderInfo
 stoi = standardOrderInfo
 
-genMaybeCounterExample :: Proof era -> String -> Bool -> OrderInfo -> [Pred era] -> Assembler era -> Gen (Maybe String)
+genMaybeCounterExample :: Era era => Proof era -> String -> Bool -> OrderInfo -> [Pred era] -> Assembler era -> Gen (Maybe String)
 genMaybeCounterExample proof _testname loud order cs target = do
   let cs3 = removeEqual cs []
   let cs4 = removeSameVar cs3 []
@@ -108,7 +108,7 @@ genMaybeCounterExample proof _testname loud order cs target = do
     then trace (unlines (messages2 ++ messages3)) (pure ans)
     else pure ans
 
-explainBad :: [(String, Bool, Pred era)] -> [SubItem era] -> String
+explainBad :: Era era => [(String, Bool, Pred era)] -> [SubItem era] -> String
 explainBad cs subst = unlines (map getString cs) ++ "\n" ++ unlines (map show restricted)
   where
     names = List.foldl' varsOfPred Set.empty (map getPred cs)
@@ -118,7 +118,7 @@ explainBad cs subst = unlines (map getString cs) ++ "\n" ++ unlines (map show re
     getPred (_, _, pr) = pr
 
 -- | Test that 'cs' :: [Pred] has a solution
-testn :: Proof era -> String -> Bool -> OrderInfo -> [Pred era] -> Assembler era -> Gen Property
+testn :: Era era => Proof era -> String -> Bool -> OrderInfo -> [Pred era] -> Assembler era -> Gen Property
 testn proof testname loud order cs target = do
   result <- genMaybeCounterExample proof testname loud order cs target
   case result of
@@ -126,7 +126,7 @@ testn proof testname loud order cs target = do
     Just xs -> pure $ counterexample xs False
 
 -- | Test that 'cs' :: [Pred] does NOT have a solution. We expect a failure
-failn :: Proof era -> String -> Bool -> OrderInfo -> [Pred era] -> Assembler era -> IO ()
+failn :: Era era => Proof era -> String -> Bool -> OrderInfo -> [Pred era] -> Assembler era -> IO ()
 failn proof message loud order cs target = do
   putStrLn ("testing shouldFail test: " ++ message)
   shouldThrow
@@ -169,7 +169,7 @@ cyclicPred = [a :⊆: b, b :⊆: c, Random d, c :⊆: a]
 test1 :: IO ()
 test1 = do
   putStrLn "testing: Detect cycles"
-  runCompile cyclicPred
+  runCompile @(ShelleyEra Standard) cyclicPred
   putStrLn "+++ OK, passed 1 test."
 
 -- ===========================================
@@ -437,7 +437,7 @@ test12 =
 -- ==============================================================
 -- Test the Component Predicate
 
-componentPreds :: Proof era -> [Pred era]
+componentPreds :: Era era => Proof era -> [Pred era]
 componentPreds proof =
   [ Random (minFeeA proof)
   , Random size

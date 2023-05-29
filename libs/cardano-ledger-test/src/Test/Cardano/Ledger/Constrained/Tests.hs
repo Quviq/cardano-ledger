@@ -106,21 +106,21 @@ instance Arbitrary OrderInfo where
 addVar :: V era t -> t -> GenEnv era -> GenEnv era
 addVar var val env = env {gEnv = storeVar var val $ gEnv env}
 
-markSolved :: Set (Name era) -> Depth -> GenEnv era -> GenEnv era
+markSolved :: Era era => Set (Name era) -> Depth -> GenEnv era -> GenEnv era
 markSolved solved d env = env {gSolved = Map.unionWith max new (gSolved env)}
   where
     new = Map.fromSet (const d) solved
 
-addSolvedVar :: V era t -> t -> Depth -> GenEnv era -> GenEnv era
+addSolvedVar :: Era era => V era t -> t -> Depth -> GenEnv era -> GenEnv era
 addSolvedVar var val d = markSolved (Set.singleton $ Name var) d . addVar var val
 
-depthOfName :: GenEnv era -> Name era -> Depth
+depthOfName :: Era era => GenEnv era -> Name era -> Depth
 depthOfName env x = Map.findWithDefault 0 x (gSolved env)
 
-depthOf :: GenEnv era -> Term era t -> Depth
+depthOf :: Era era => GenEnv era -> Term era t -> Depth
 depthOf env t = maximum $ 0 : map (depthOfName env) (Set.toList $ vars t)
 
-depthOfSum :: GenEnv era -> Sum era c -> Depth
+depthOfSum :: Era era => GenEnv era -> Sum era c -> Depth
 depthOfSum env = \case
   SumMap t -> depthOf env t
   SumList t -> depthOf env t
@@ -154,7 +154,7 @@ genFreshVarName = elements . varNames
       where
         Env vmap = gEnv env
 
-envVarsOfType :: Env era -> Rep era t -> [(V era t, t)]
+envVarsOfType :: Era era => Env era -> Rep era t -> [(V era t, t)]
 envVarsOfType (Env env) rep = concatMap wellTyped $ Map.toList env
   where
     wellTyped (name, Payload rep' val access) =
@@ -515,7 +515,7 @@ withEq _ _ = Nothing
 
 -- We can't drop constraints due to dependency limitations. There needs to be at least one
 -- constraint to solve each variable. We can replace constraints by Random though!
-shrinkPreds :: ([Pred era], GenEnv era) -> [([Pred era], GenEnv era)]
+shrinkPreds :: Era era => ([Pred era], GenEnv era) -> [([Pred era], GenEnv era)]
 shrinkPreds (preds, env) =
   [ (preds', env')
   | preds' <- shrinkList shrinkPred preds
@@ -658,6 +658,14 @@ constraintProperty timeout strict whitelist info prop =
         ]
         ==> counterexample (unlines errs) False
     checkWhitelist (Right x) k = property $ k x
+
+checkPredicates :: Era era => [Pred era] -> Env era -> Property
+checkPredicates preds env =
+  counterexample ("-- Solution --\n" ++ showEnv env) $
+    conjoin $
+      map checkPred preds
+  where
+    checkPred pr = counterexample ("Failed: " ++ showPred pr) $ ensureTyped (runPred env pr) id
 
 runPreds :: [Pred TestEra] -> IO ()
 runPreds ps = do

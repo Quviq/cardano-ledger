@@ -25,6 +25,7 @@ module Test.Cardano.Ledger.Constrained.Env (
   Access (..),
 ) where
 
+import Cardano.Ledger.Era (Era)
 import Data.List (intercalate)
 import qualified Data.List as List
 import Data.Map.Strict (Map)
@@ -61,10 +62,10 @@ instance Show (Name era) where
   show (Name (V n _ _)) = n
 
 -- | Does not satisfy extensionality
-instance Eq (Name era) where
+instance Era era => Eq (Name era) where
   Name (V n1 rep1 _) == Name (V n2 rep2 _) = n1 == n2 && isJust (testEql rep1 rep2)
 
-instance Ord (Name era) where
+instance Era era => Ord (Name era) where
   compare v1@(Name (V n1 rep1 _)) v2@(Name (V n2 rep2 _)) =
     if v1 == v2
       then EQ
@@ -90,7 +91,7 @@ instance Show (AnyF era s) where
   show (AnyF (Field n r _)) = "Field " ++ n ++ " " ++ show r
   show (AnyF (FConst r t _)) = "FConst " ++ synopsis r t
 
-vToField :: Eq t => Rep era s -> V era t -> Typed (Field era s t)
+vToField :: (Eq t, Era era) => Rep era s -> V era t -> Typed (Field era s t)
 vToField reps (V name rept access@(Yes reps' _)) = case testEql reps reps' of
   Just Refl -> pure $ Field name rept access
   Nothing ->
@@ -111,7 +112,7 @@ fieldToV (FConst _ _ _) = failT ["Cannot convert a FieldConst to a V"]
 data Payload era where
   Payload :: Rep era t -> t -> Access era s t -> Payload era
 
-instance Shaped (V era) (Rep era) where
+instance Era era => Shaped (V era) (Rep era) where
   shape (V n1 rep _) = Nary 0 [Esc StringR n1, shape rep]
 
 -- We are ignoring the Accessfield on purpose
@@ -126,7 +127,7 @@ instance Show (Env era) where
 emptyEnv :: Env era
 emptyEnv = Env Map.empty
 
-findVar :: V era t -> Env era -> Typed t
+findVar :: Era era => V era t -> Env era -> Typed t
 findVar (V name rep1 _) (Env m) =
   case Map.lookup name m of
     Nothing -> failT ["Cannot find " ++ name ++ " in env"]

@@ -57,7 +57,8 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Universe (Eql, Shape (..), Shaped (..), Singleton (..), cmpIndex, (:~:) (Refl))
+import Data.Typeable
+import Data.Universe (Eql, Shape (..), Shaped (..), Singleton (..), cmpIndex)
 import Data.Word (Word64)
 import Lens.Micro
 import Numeric.Natural (Natural)
@@ -99,6 +100,9 @@ import Test.Cardano.Ledger.Shelley.Serialisation.EraIndepGenerators ()
 import Test.Cardano.Ledger.Shelley.Serialisation.Generators ()
 import Test.Cardano.Ledger.ShelleyMA.Serialisation.Generators ()
 import Test.QuickCheck hiding (Fixed, total)
+
+data IsTypeable a where
+  IsTypeable :: Typeable a => IsTypeable a
 
 -- =======================================================================
 infixr 0 :->
@@ -153,68 +157,53 @@ data Rep era t where
 -- ===========================================================
 -- Proof of Rep equality
 
-instance Singleton (Rep e) where
-  testEql RationalR RationalR = Just Refl
-  testEql CoinR CoinR = Just Refl
-  testEql EpochR EpochR = Just Refl
-  testEql (a :-> b) (x :-> y) = do
-    Refl <- testEql a x
-    Refl <- testEql b y
-    Just Refl
-  testEql (MapR a b) (MapR x y) = do
-    Refl <- testEql a x
-    Refl <- testEql b y
-    Just Refl
-  testEql (SetR a) (SetR b) = do
-    Refl <- testEql a b
-    Just Refl
-  testEql (ListR a) (ListR b) = do
-    Refl <- testEql a b
-    Just Refl
-  testEql CredR CredR = Just Refl
-  testEql PoolHashR PoolHashR = Just Refl
-  testEql WitHashR WitHashR = Just Refl
-  testEql GenHashR GenHashR = Just Refl
-  testEql GenDelegHashR GenDelegHashR = Just Refl
-  testEql PoolParamsR PoolParamsR = Just Refl
-  testEql NewEpochStateR NewEpochStateR = Just Refl
-  testEql IntR IntR = Just Refl
-  testEql FloatR FloatR = Just Refl
-  testEql NaturalR NaturalR = Just Refl
-  testEql Word64R Word64R = Just Refl
-  testEql TxInR TxInR = Just Refl
-  testEql StringR StringR = Just Refl
-  testEql UnitR UnitR = Just Refl
-  testEql (PairR a b) (PairR x y) = do
-    Refl <- testEql a x
-    Refl <- testEql b y
-    Just Refl
-  testEql (ProtVerR c) (ProtVerR d) =
-    do Refl <- testEql c d; pure Refl
-  testEql (ValueR c) (ValueR d) =
-    do Refl <- testEql c d; pure Refl
-  testEql (UTxOR p1) (UTxOR p2) = do
-    Refl <- testEql p1 p2
-    pure Refl
-  testEql (TxOutR c) (TxOutR d) =
-    do Refl <- testEql c d; pure Refl
-  testEql (PParamsR c) (PParamsR d) =
-    do Refl <- testEql c d; pure Refl
-  testEql (PParamsUpdateR c) (PParamsUpdateR d) =
-    do Refl <- testEql c d; pure Refl
-  testEql DeltaCoinR DeltaCoinR = Just Refl
-  testEql GenDelegPairR GenDelegPairR = Just Refl
-  testEql FutureGenDelegR FutureGenDelegR = Just Refl
-  testEql (PPUPStateR c) (PPUPStateR d) = do Refl <- testEql c d; pure Refl
-  testEql PtrR PtrR = Just Refl
-  testEql IPoolStakeR IPoolStakeR = Just Refl
-  testEql SnapShotsR SnapShotsR = Just Refl
-  testEql RewardR RewardR = Just Refl
-  testEql (MaybeR c) (MaybeR d) =
-    do Refl <- testEql c d; pure Refl
-  testEql SlotNoR SlotNoR = Just Refl
-  testEql SizeR SizeR = Just Refl
-  testEql _ _ = Nothing
+repTypeable :: Era era => Rep era t -> IsTypeable t
+repTypeable r = case r of
+  RationalR{} -> IsTypeable
+  CoinR{} -> IsTypeable
+  EpochR{} -> IsTypeable
+  CredR{} -> IsTypeable
+  VCredR{} -> IsTypeable
+  PoolHashR{} -> IsTypeable
+  WitHashR{} -> IsTypeable
+  GenHashR{} -> IsTypeable
+  GenDelegHashR{} -> IsTypeable
+  VHashR{} -> IsTypeable
+  PoolParamsR{} -> IsTypeable
+  NewEpochStateR{} -> IsTypeable
+  IntR{} -> IsTypeable
+  FloatR{} -> IsTypeable
+  NaturalR{} -> IsTypeable
+  Word64R{} -> IsTypeable
+  TxInR{} -> IsTypeable
+  StringR{} -> IsTypeable
+  UnitR{} -> IsTypeable
+  ProtVerR{} -> IsTypeable
+  ValueR{} -> IsTypeable
+  UTxOR{} -> IsTypeable
+  TxOutR{} -> IsTypeable
+  PParamsR{} -> IsTypeable
+  PParamsUpdateR{} -> IsTypeable
+  DeltaCoinR{} -> IsTypeable
+  GenDelegPairR{} -> IsTypeable
+  FutureGenDelegR{} -> IsTypeable
+  PPUPStateR{} -> IsTypeable
+  PtrR{} -> IsTypeable
+  IPoolStakeR{} -> IsTypeable
+  SnapShotsR{} -> IsTypeable
+  RewardR{} -> IsTypeable
+  SlotNoR{} -> IsTypeable
+  SizeR{} -> IsTypeable
+  (repTypeable -> IsTypeable) :-> (repTypeable -> IsTypeable) -> IsTypeable
+  MapR (repTypeable -> IsTypeable) (repTypeable -> IsTypeable) -> IsTypeable
+  SetR (repTypeable -> IsTypeable) -> IsTypeable
+  ListR (repTypeable -> IsTypeable) -> IsTypeable
+  PairR (repTypeable -> IsTypeable) (repTypeable -> IsTypeable) -> IsTypeable
+  MaybeR (repTypeable -> IsTypeable) -> IsTypeable
+
+instance Era era => Singleton (Rep era) where
+  testEql (repTypeable -> IsTypeable :: IsTypeable a)
+          (repTypeable -> IsTypeable :: IsTypeable b) = eqT @a @b
   cmpIndex x y = compare (shape x) (shape y)
 
 -- ============================================================
@@ -393,7 +382,7 @@ instance Shaped (Rep era) any where
   shape CommColdHashR = Nullary 41
   shape CommHotHashR = Nullary 42
 
-compareRep :: forall era t s. Rep era t -> Rep era s -> Ordering
+compareRep :: forall era t s. Era era => Rep era t -> Rep era s -> Ordering
 compareRep x y = cmpIndex @(Rep era) x y
 
 -- ================================================
@@ -518,6 +507,8 @@ shrinkRep NewEpochStateR _ = []
 shrinkRep (ProtVerR _) t = shrink t
 shrinkRep SlotNoR t = shrink t
 shrinkRep SizeR _ = []
+shrinkRep VCredR t = shrink t
+shrinkRep VHashR t = shrink t
 
 -- ===========================
 

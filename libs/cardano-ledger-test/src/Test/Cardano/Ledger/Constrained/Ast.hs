@@ -9,6 +9,7 @@
 module Test.Cardano.Ledger.Constrained.Ast where
 
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
+import Cardano.Ledger.Era (Era)
 import Cardano.Ledger.Pretty
 import Data.Char (toLower)
 import qualified Data.List as List
@@ -193,7 +194,7 @@ targetPair x = (nameOf x, targetRecord x [])
 -- Their are no binders in any of these, so this is not so difficult
 -- But (V era t) may have different 't', so we hide 't' in 'Name'
 
-varsOfTerm :: Set (Name era) -> Term era t -> Set (Name era)
+varsOfTerm :: Era era => Set (Name era) -> Term era t -> Set (Name era)
 varsOfTerm ans s = case s of
   Lit _ _ -> ans
   Var v@(V _ _ _) -> Set.insert (Name v) ans
@@ -204,16 +205,16 @@ varsOfTerm ans s = case s of
   Delta x -> varsOfTerm ans x
   Negate x -> varsOfTerm ans x
 
-vars :: Term era t -> Set (Name era)
+vars :: Era era => Term era t -> Set (Name era)
 vars x = varsOfTerm Set.empty x
 
-varsOfTarget :: Set (Name era) -> Target era t -> Set (Name era)
+varsOfTarget :: Era era => Set (Name era) -> Target era t -> Set (Name era)
 varsOfTarget ans s = case s of
   (a :$ b) -> varsOfTarget (varsOfTarget ans a) b
   (Simple x) -> varsOfTerm ans x
   (Constr _ _) -> ans
 
-varsOfPred :: Set (Name era) -> Pred era -> Set (Name era)
+varsOfPred :: Era era => Set (Name era) -> Pred era -> Set (Name era)
 varsOfPred ans s = case s of
   Sized a b -> varsOfTerm (varsOfTerm ans a) b
   (a :=: b) -> varsOfTerm (varsOfTerm ans a) b
@@ -227,7 +228,7 @@ varsOfPred ans s = case s of
       varsOfComponent l (AnyF (FConst _ _ _)) = l
   (CanFollow a b) -> varsOfTerm (varsOfTerm ans a) b
 
-varsOfSum :: Set (Name era) -> Sum era r -> Set (Name era)
+varsOfSum :: Era era => Set (Name era) -> Sum era r -> Set (Name era)
 varsOfSum ans (SumMap y) = varsOfTerm ans y
 varsOfSum ans (SumList y) = varsOfTerm ans y
 varsOfSum ans (One y) = varsOfTerm ans y
@@ -262,7 +263,7 @@ pad n x = x ++ replicate (n - length x) ' '
 extend :: V era t -> Term era t -> Subst era -> Subst era
 extend v k xs = (SubItem v k) : xs
 
-findV :: Subst era -> V era t -> Term era t
+findV :: Era era => Subst era -> V era t -> Term era t
 findV [] v@(V _ _ _) = Var v -- If its not in the Subst, return the Var
 findV (SubItem (V n2 rep2 _) kn : more) v@(V n1 rep1 _) =
   if n1 /= n2
@@ -279,7 +280,7 @@ findV (SubItem (V n2 rep2 _) kn : more) v@(V n1 rep1 _) =
               ++ show rep2
           )
 
-substTerm :: Subst era -> Term era t -> Term era t
+substTerm :: Era era => Subst era -> Term era t -> Term era t
 substTerm sub (Var v) = findV sub v
 substTerm _ (Lit r k) = Lit r k
 substTerm sub (Dom x) = Dom (substTerm sub x)
@@ -289,7 +290,7 @@ substTerm sub (ProjS l r x) = ProjS l r (substTerm sub x)
 substTerm sub (Delta x) = Delta (substTerm sub x)
 substTerm sub (Negate x) = Negate (substTerm sub x)
 
-substPred :: Subst era -> Pred era -> Pred era
+substPred :: Era era => Subst era -> Pred era -> Pred era
 substPred sub (Sized a b) = Sized (substTerm sub a) (substTerm sub b)
 substPred sub (a :=: b) = substTerm sub a :=: substTerm sub b
 substPred sub (a `Subset` b) = substTerm sub a `Subset` substTerm sub b
@@ -304,13 +305,13 @@ substPred sub (Component t cs) = Component (substTerm sub t) (substComp <$> cs)
     substComp x@(AnyF (FConst _ _ _)) = x
 substPred sub (CanFollow a b) = CanFollow (substTerm sub a) (substTerm sub b)
 
-substSum :: Subst era -> Sum era t -> Sum era t
+substSum :: Era era => Subst era -> Sum era t -> Sum era t
 substSum sub (SumMap x) = SumMap (substTerm sub x)
 substSum sub (SumList x) = SumList (substTerm sub x)
 substSum sub (One x) = One (substTerm sub x)
 substSum sub (Project crep x) = Project crep (substTerm sub x)
 
-substTarget :: Subst era -> Target era t -> Target era t
+substTarget :: Era era => Subst era -> Target era t -> Target era t
 substTarget sub (Simple e) = Simple (substTerm sub e)
 substTarget sub (a :$ b) = substTarget sub a :$ substTarget sub b
 substTarget _ (Constr n f) = Constr n f
@@ -345,7 +346,7 @@ simplifySum (Project _ (Lit _ m)) = pure (List.foldl' (\ans x -> add ans (getSum
 simplifySum x = failT ["Can't simplify Sum: " ++ show x ++ ", to a value."]
 
 -- | Fully evaluate a `Term`, looking up the variables in the `Env`.
-runTerm :: Env era -> Term era t -> Typed t
+runTerm :: Era era => Env era -> Term era t -> Typed t
 runTerm _ (Lit _ x) = pure x
 runTerm env (Dom x) = Map.keysSet <$> runTerm env x
 runTerm env (Rng x) = Set.fromList . Map.elems <$> runTerm env x
@@ -363,7 +364,7 @@ runTerm env (Negate x) = do
   DeltaCoin n <- runTerm env x
   pure (DeltaCoin (-n))
 
-runPred :: Env era -> Pred era -> Typed Bool
+runPred :: Era era => Env era -> Pred era -> Typed Bool
 runPred env (Sized w x) = do
   sz <- runTerm env w
   item <- runTerm env x
@@ -394,7 +395,7 @@ runPred env (CanFollow x y) = do
   y2 <- runTerm env y
   pure (canFollow x2 y2)
 
-runComp :: Env era -> s -> AnyF era s -> Typed Bool
+runComp :: Era era => Env era -> s -> AnyF era s -> Typed Bool
 runComp _ _ (AnyF (Field _ _ No)) = pure False
 runComp _ _ (AnyF (FConst _ _ No)) = pure False
 runComp env t (AnyF (Field n r a@(Yes _ l))) = do
@@ -412,7 +413,7 @@ termRep (ProjS _ t (termRep -> SetR _)) = SetR t
 termRep (Delta _) = DeltaCoinR
 termRep (Negate _) = DeltaCoinR
 
-runSum :: Env era -> Sum era c -> Typed c
+runSum :: Era era => Env era -> Sum era c -> Typed c
 runSum env (SumMap t) = Map.foldl' add zero <$> runTerm env t
 runSum env (SumList t) = List.foldl' add zero <$> runTerm env t
 runSum env (One t) = runTerm env t
@@ -420,7 +421,7 @@ runSum env (Project _ t) = Map.foldl' accum zero <$> runTerm env t
   where
     accum ans x = add ans (getSum x)
 
-makeTest :: Env era -> Pred era -> Typed (String, Bool, Pred era)
+makeTest :: Era era => Env era -> Pred era -> Typed (String, Bool, Pred era)
 makeTest env c = do
   b <- runPred env c
   pure (show c ++ " => " ++ show b, b, c)
