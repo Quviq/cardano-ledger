@@ -15,8 +15,8 @@
 module Test.Cardano.Ledger.Constrained.Examples where
 
 import Cardano.Ledger.TxIn (TxIn)
-import Cardano.Ledger.Keys (GenDelegPair, KeyHash, KeyRole (..))
-import Cardano.Ledger.Credential (Credential)
+import Cardano.Ledger.Keys (GenDelegPair, KeyHash, KeyRole (..), hashKey, coerceKeyRole)
+import Cardano.Ledger.Credential (Credential(..))
 import Cardano.Ledger.CertState (FutureGenDeleg (..))
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Era (Era (EraCrypto))
@@ -26,12 +26,13 @@ import Control.Monad (when)
 import qualified Data.List as List
 import Data.Set (Set)
 import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Ratio ((%))
 import qualified Data.Set as Set
 import Debug.Trace (trace)
+import Test.Cardano.Ledger.Core.KeyPair (KeyPair(..))
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Classes (Adds (..), Sums (genT))
-import Test.Cardano.Ledger.Constrained.Combinators (setSized)
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Lenses (fGenDelegGenKeyHashL)
 import Test.Cardano.Ledger.Constrained.Monad
@@ -553,20 +554,22 @@ test16 =
 -- ==============================================
 
 data EpochStateUniv era = EpochStateUniv
-  { credsUniv   :: Set (Credential 'Staking (EraCrypto era))
-  , poolsUniv   :: Set (KeyHash 'StakePool (EraCrypto era))
-  , genesisUniv :: Set (KeyHash 'Genesis (EraCrypto era))
-  , txinUniv    :: Set (TxIn (EraCrypto era))
+  { txinUniv :: Set (TxIn (EraCrypto era))
+  , keysUniv :: Map (KeyHash 'Witness (EraCrypto era)) (KeyPair 'Witness (EraCrypto era))
   }
-  deriving (Show)
+
+instance Show (EpochStateUniv era) where
+  show _ = "EpochStateUniv{..}"
 
 instance Era era => Arbitrary (EpochStateUniv era) where
   arbitrary =
     EpochStateUniv
-      <$> setSized ["arbitrary EpochStateUniv"] 15 arbitrary
-      <*> setSized ["arbitrary EpochStateUniv"] 20 arbitrary
-      <*> setSized ["arbitrary EpochStateUniv"] 12 arbitrary
-      <*> setSized ["arbitrary EpochStateUniv"] 12 arbitrary
+      <$> (Set.fromList <$> vectorOf 15 arbitrary)
+      <*> (Map.fromList <$> vectorOf 15 genKeyPair)
+    where
+      genKeyPair = do
+        key <- arbitrary
+        pure (hashKey $ vKey key, key)
 
 univPreds :: Proof era -> EpochStateUniv era -> [Pred era]
 univPreds p EpochStateUniv{..} =
@@ -598,9 +601,11 @@ univPreds p EpochStateUniv{..} =
   , Dom (utxo p) :⊆: txinUnivTm
   ]
   where
-    credsUnivTm = Lit (SetR CredR) credsUniv
-    poolsUnivTm = Lit (SetR PoolHashR) poolsUniv
-    genesisUnivTm = Lit (SetR GenHashR) genesisUniv
+    -- TODO: script hashes
+    keyHashes = Map.keysSet keysUniv
+    credsUnivTm = Lit (SetR CredR) $ Set.mapMonotonic (KeyHashObj . coerceKeyRole) keyHashes
+    poolsUnivTm = Lit (SetR PoolHashR) $ Set.mapMonotonic coerceKeyRole keyHashes
+    genesisUnivTm = Lit (SetR GenHashR) $ Set.mapMonotonic coerceKeyRole keyHashes
     txinUnivTm = Lit (SetR TxInR) txinUniv
 
 pstatePreds :: Proof era -> [Pred era]
