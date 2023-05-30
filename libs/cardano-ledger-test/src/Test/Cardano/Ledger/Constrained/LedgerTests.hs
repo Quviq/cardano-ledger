@@ -9,6 +9,11 @@ import Lens.Micro ((^.))
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Env
 
+import Data.Default.Class (Default (def))
+import Test.Cardano.Ledger.Generic.GenState
+import Test.Cardano.Ledger.Generic.ModelState
+import Test.Cardano.Ledger.Generic.TxGen
+
 -- import Cardano.Ledger.Coin
 -- import Cardano.Ledger.Shelley
 import Cardano.Ledger.Era (Era)
@@ -164,3 +169,10 @@ validEpochState st = checkPredicates preds (saturateEnv env preds)
     env   = unTarget NewEpochStateR (newEpochStateT testProof) st
     preds = newepochConstraints testProof
 
+testGenerateTx :: IO ()
+testGenerateTx = do
+  nes <- generate $ genNewEpochState testProof
+  (tx, _) <- generate $ runGenRS testProof def $ do
+    modifyModel (const $ abstract nes)
+    snd <$> genAlonzoTx testProof 0
+  print tx
