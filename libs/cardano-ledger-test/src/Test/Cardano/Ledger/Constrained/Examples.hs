@@ -9,24 +9,29 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Test.Cardano.Ledger.Constrained.Examples where
 
+import Cardano.Ledger.TxIn (TxIn)
+import Cardano.Ledger.Keys (GenDelegPair, KeyHash, KeyRole (..))
+import Cardano.Ledger.Credential (Credential)
 import Cardano.Ledger.CertState (FutureGenDeleg (..))
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Era (Era (EraCrypto))
-import Cardano.Ledger.Keys (GenDelegPair)
 import Cardano.Ledger.Shelley.Rewards (Reward (..))
 import Control.Exception (ErrorCall (..))
 import Control.Monad (when)
 import qualified Data.List as List
+import Data.Set (Set)
 import Data.Map (Map)
 import Data.Ratio ((%))
 import qualified Data.Set as Set
 import Debug.Trace (trace)
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Classes (Adds (..), Sums (genT))
+import Test.Cardano.Ledger.Constrained.Combinators (setSized)
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Lenses (fGenDelegGenKeyHashL)
 import Test.Cardano.Ledger.Constrained.Monad
@@ -200,6 +205,7 @@ test3 = testn (Mary Standard) "Test 3. PState example" False stoi cs (Assemble p
       , Dom retiring :⊆: Dom regPools
       , SumsTo (1 % 1000) (Lit RationalR 1) EQL [SumMap mockPoolDistr]
       ]
+    poolsUniv = Var $ V "poolsUniv" (SetR PoolHashR) No
 
 -- ==============================
 
@@ -259,6 +265,10 @@ constraints proof =
   , Random utxoCoin
   , Random $ pparams proof
   ]
+  where
+    credsUniv = Var $ V "credsUniv" (SetR CredR) No
+    poolsUniv = Var $ V "poolsUniv" (SetR PoolHashR) No
+
 
 -- | Test that we can find a viable variable ordering
 test6 :: Bool -> IO ()
@@ -316,6 +326,8 @@ pstateConstraints =
   , Disjoint (Dom futureRegPools) (Dom retiring)
   -- , (Dom futureRegPools) :⊆: (Dom regPools)  I am pretty sure we don't want this
   ]
+  where
+    poolsUniv = Var $ V "poolsUniv" (SetR PoolHashR) No
 
 {-
 retiring: (Map (KeyHash 'StakePool c) EpochNo)
@@ -484,6 +496,8 @@ test14 =
     , Dom rewards :=: credsUniv
     ]
     Skip
+  where
+    credsUniv = Var $ V "credsUniv" (SetR CredR) No
 
 -- ==============================================
 
@@ -522,6 +536,7 @@ preds16 _proof =
   ]
   where
     foox = Var (V "foo" (MapR PoolHashR RationalR) No)
+    poolsUniv = Var $ V "poolsUniv" (SetR PoolHashR) No
 
 test16 :: Gen Property
 test16 =
@@ -537,39 +552,56 @@ test16 =
 
 -- ==============================================
 
-univPreds :: Proof era -> [Pred era]
-univPreds p =
-  [ Sized (ExactSize 15) credsUniv
-  , Sized (ExactSize 20) poolsUniv
-  , Sized (ExactSize 12) genesisUniv
-  , Sized (ExactSize 12) txinUniv
-  , Dom poolDistr :⊆: poolsUniv
-  , Dom regPools :⊆: poolsUniv
-  , Dom retiring :⊆: poolsUniv
-  , Dom futureRegPools :⊆: poolsUniv
-  , Dom poolDeposits :⊆: poolsUniv
-  , Dom prevBlocksMade :⊆: poolsUniv
-  , Dom currBlocksMade :⊆: poolsUniv
-  , Dom markPools :⊆: poolsUniv
-  , Dom markPoolDistr :⊆: poolsUniv
-  , Dom setPools :⊆: poolsUniv
-  , Dom goPools :⊆: poolsUniv
-  , Dom stakeDeposits :⊆: credsUniv
-  , Dom delegations :⊆: credsUniv
-  , Dom rewards :⊆: credsUniv
-  , Dom markStake :⊆: credsUniv
-  , Dom markDelegs :⊆: credsUniv
-  , Dom setStake :⊆: credsUniv
-  , Dom setDelegs :⊆: credsUniv
-  , Dom goStake :⊆: credsUniv
-  , Dom goDelegs :⊆: credsUniv
-  , Dom instanReserves :⊆: credsUniv
-  , Dom instanTreasury :⊆: credsUniv
-  , Dom (proposalsT p) :⊆: genesisUniv
-  , Dom (futureProposalsT p) :⊆: genesisUniv
-  , Dom genDelegs :⊆: genesisUniv
-  , Dom (utxo p) :⊆: txinUniv
+data EpochStateUniv era = EpochStateUniv
+  { credsUniv   :: Set (Credential 'Staking (EraCrypto era))
+  , poolsUniv   :: Set (KeyHash 'StakePool (EraCrypto era))
+  , genesisUniv :: Set (KeyHash 'Genesis (EraCrypto era))
+  , txinUniv    :: Set (TxIn (EraCrypto era))
+  }
+  deriving (Show)
+
+instance Era era => Arbitrary (EpochStateUniv era) where
+  arbitrary =
+    EpochStateUniv
+      <$> setSized ["arbitrary EpochStateUniv"] 15 arbitrary
+      <*> setSized ["arbitrary EpochStateUniv"] 20 arbitrary
+      <*> setSized ["arbitrary EpochStateUniv"] 12 arbitrary
+      <*> setSized ["arbitrary EpochStateUniv"] 12 arbitrary
+
+univPreds :: Proof era -> EpochStateUniv era -> [Pred era]
+univPreds p EpochStateUniv{..} =
+  [ Dom poolDistr :⊆: poolsUnivTm
+  , Dom regPools :⊆: poolsUnivTm
+  , Dom retiring :⊆: poolsUnivTm
+  , Dom futureRegPools :⊆: poolsUnivTm
+  , Dom poolDeposits :⊆: poolsUnivTm
+  , Dom prevBlocksMade :⊆: poolsUnivTm
+  , Dom currBlocksMade :⊆: poolsUnivTm
+  , Dom markPools :⊆: poolsUnivTm
+  , Dom markPoolDistr :⊆: poolsUnivTm
+  , Dom setPools :⊆: poolsUnivTm
+  , Dom goPools :⊆: poolsUnivTm
+  , Dom stakeDeposits :⊆: credsUnivTm
+  , Dom delegations :⊆: credsUnivTm
+  , Dom rewards :⊆: credsUnivTm
+  , Dom markStake :⊆: credsUnivTm
+  , Dom markDelegs :⊆: credsUnivTm
+  , Dom setStake :⊆: credsUnivTm
+  , Dom setDelegs :⊆: credsUnivTm
+  , Dom goStake :⊆: credsUnivTm
+  , Dom goDelegs :⊆: credsUnivTm
+  , Dom instanReserves :⊆: credsUnivTm
+  , Dom instanTreasury :⊆: credsUnivTm
+  , Dom (proposalsT p) :⊆: genesisUnivTm
+  , Dom (futureProposalsT p) :⊆: genesisUnivTm
+  , Dom genDelegs :⊆: genesisUnivTm
+  , Dom (utxo p) :⊆: txinUnivTm
   ]
+  where
+    credsUnivTm = Lit (SetR CredR) credsUniv
+    poolsUnivTm = Lit (SetR PoolHashR) poolsUniv
+    genesisUnivTm = Lit (SetR GenHashR) genesisUniv
+    txinUnivTm = Lit (SetR TxInR) txinUniv
 
 pstatePreds :: Proof era -> [Pred era]
 pstatePreds _p =
@@ -657,9 +689,9 @@ newepochstatePreds _proof =
   , SumsTo (1 % 1000) (Lit RationalR 1) EQL [Project RationalR poolDistr]
   ]
 
-newepochConstraints :: Reflect era => Proof era -> [Pred era]
-newepochConstraints pr =
-  univPreds pr
+newepochConstraints :: Reflect era => Proof era -> EpochStateUniv era -> [Pred era]
+newepochConstraints pr env =
+  univPreds pr env
     ++ pstatePreds pr
     ++ dstatePreds pr
     ++ utxostatePreds pr
@@ -668,13 +700,14 @@ newepochConstraints pr =
     ++ newepochstatePreds pr
 
 test17 :: Gen Property
-test17 =
+test17 = do
+  env <- arbitrary
   testn
     proof
     "Test 17. Full NewEpochState"
     False
     (stoi {sumBeforeParts = False})
-    (newepochConstraints proof)
+    (newepochConstraints proof env)
     (Assemble (newEpochStateT proof))
   where
     proof = Alonzo Standard
@@ -707,6 +740,7 @@ projPreds2 _proof =
   ]
   where
     futGDUniv = (Var (V "futGDUniv" (SetR FutureGenDelegR) No))
+    genesisUniv = Var $ V "genesisUniv" (SetR GenHashR) No
 
 test18a :: Gen Property
 test18a = testn proof "Test 18a. Projection test" False stoi (projPreds1 proof) Skip

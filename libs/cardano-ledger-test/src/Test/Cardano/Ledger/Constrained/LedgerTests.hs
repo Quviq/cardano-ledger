@@ -27,7 +27,7 @@ import Test.Cardano.Ledger.Constrained.Tests (checkPredicates)
 import Test.Cardano.Ledger.Constrained.Shrink
 
 import Test.Cardano.Ledger.Constrained.Examples (univPreds, pstatePreds, dstatePreds, utxostatePreds, accountstatePreds,
-                                                 epochstatePreds, newepochstatePreds, runTarget)
+                                                 epochstatePreds, newepochstatePreds, runTarget, EpochStateUniv)
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
@@ -135,12 +135,12 @@ newepochConstraints pr =
   ++ epochstatePreds pr
   ++ newepochstatePreds pr
 
-genNewEpochState :: Reflect era => Proof era -> Gen (NewEpochState era)
-genNewEpochState proof =
+genNewEpochState :: Reflect era => Proof era -> EpochStateUniv era -> Gen (NewEpochState era)
+genNewEpochState proof env =
   genFromConstraints
     proof
     standardOrderInfo {sumBeforeParts = False}
-    (univPreds proof ++ newepochConstraints proof)
+    (univPreds proof env ++ newepochConstraints proof)
     (newEpochStateT proof)
 
 shrinkNewEpochState :: Reflect era => Proof era -> NewEpochState era -> [NewEpochState era]
@@ -159,8 +159,9 @@ type TestEra = ShelleyEra Standard
 testProof :: Proof TestEra
 testProof = Shelley Standard
 
-prop_newEpochState :: Property
-prop_newEpochState = forAllShrinkBlind (genNewEpochState testProof) (shrinkNewEpochState testProof) $ \ st ->
+prop_newEpochState :: EpochStateUniv TestEra -> Property
+prop_newEpochState env =
+  forAllShrinkBlind (genNewEpochState testProof env) (shrinkNewEpochState testProof) $ \ st ->
   validEpochState st .&&. conjoin (map validEpochState $ shrinkNewEpochState testProof st)
 
 validEpochState :: NewEpochState TestEra -> Property
@@ -171,7 +172,8 @@ validEpochState st = checkPredicates preds (saturateEnv env preds)
 
 testGenerateTx :: IO ()
 testGenerateTx = do
-  nes <- generate $ genNewEpochState testProof
+  env <- generate arbitrary
+  nes <- generate $ genNewEpochState testProof env
   (tx, _) <- generate $ runGenRS testProof def $ do
     modifyModel (const $ abstract nes)
     snd <$> genAlonzoTx testProof 0

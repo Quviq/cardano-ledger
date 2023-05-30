@@ -552,18 +552,6 @@ totalAda = Var $ V "totalAda" CoinR No
 utxoCoin :: Term era Coin
 utxoCoin = Var $ V "utxoCoin" CoinR No
 
-credsUniv :: Term era (Set (Credential 'Staking (EraCrypto era)))
-credsUniv = Var $ V "credsUniv" (SetR CredR) No
-
-poolsUniv :: Term era (Set (KeyHash 'StakePool (EraCrypto era)))
-poolsUniv = Var $ V "poolsUniv" (SetR PoolHashR) No
-
-genesisUniv :: Term era (Set (KeyHash 'Genesis (EraCrypto era)))
-genesisUniv = Var $ V "genesisUniv" (SetR GenHashR) No
-
-txinUniv :: Term era (Set (TxIn (EraCrypto era)))
-txinUniv = Var $ V "txinUniv" (SetR TxInR) No
-
 -- ====================================================================
 -- Targets for sub types of NewEpochState
 -- A Target assembles variables into data stuctures. The main concern
