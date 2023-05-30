@@ -26,12 +26,11 @@ import Test.Cardano.Ledger.Constrained.Tests (checkPredicates)
 
 import Test.Cardano.Ledger.Constrained.Shrink
 
-import Test.Cardano.Ledger.Constrained.Examples (univPreds, pstatePreds, dstatePreds, utxostatePreds, accountstatePreds,
-                                                 epochstatePreds, newepochstatePreds, runTarget, EpochStateUniv)
+import Test.Cardano.Ledger.Constrained.Examples hiding (newepochConstraints)
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
-import Test.Cardano.Ledger.Generic.Proof (Reflect (..), ConwayEra, ShelleyEra, Standard)
+import Test.Cardano.Ledger.Generic.Proof (Reflect (..), ShelleyEra, Standard)
 import Test.QuickCheck hiding (getSize, total)
 
 genFromConstraints :: Era era => Proof era -> OrderInfo -> [Pred era] -> Target era t -> Gen t
@@ -174,7 +173,9 @@ testGenerateTx :: IO ()
 testGenerateTx = do
   env <- generate arbitrary
   nes <- generate $ genNewEpochState testProof env
-  (tx, _) <- generate $ runGenRS testProof def $ do
-    modifyModel (const $ abstract nes)
+  (_tx, _) <- generate $ runGenRS testProof def $ do
+    modifyGenStateKeys $ const (keysUniv env)
+    modifyModel $ const (abstract nes)
     snd <$> genAlonzoTx testProof 0
-  print tx
+  putStrLn "Success!"
+  -- print tx
