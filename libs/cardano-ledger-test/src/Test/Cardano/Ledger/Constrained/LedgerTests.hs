@@ -4,7 +4,8 @@ module Test.Cardano.Ledger.Constrained.LedgerTests where
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.Maybe
-import Lens.Micro ((^.))
+import qualified Data.Sequence as Seq
+import Lens.Micro ((^.), (%~), (&), (.~))
 
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Env
@@ -13,15 +14,17 @@ import Data.Default.Class (Default (def))
 import Test.Cardano.Ledger.Generic.GenState
 import Test.Cardano.Ledger.Generic.ModelState
 import Test.Cardano.Ledger.Generic.TxGen
+import Test.Cardano.Ledger.Generic.Updaters
 
 -- import Cardano.Ledger.Coin
 -- import Cardano.Ledger.Shelley
-import Cardano.Ledger.Era (Era)
-import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
+-- import Cardano.Ledger.Era (Era)
+import Cardano.Ledger.Shelley.LedgerState (NewEpochState(..), EpochState(..))
 import Test.Cardano.Ledger.Constrained.Classes
 import Test.Cardano.Ledger.Constrained.Monad
 import Test.Cardano.Ledger.Constrained.Size
 import Test.Cardano.Ledger.Constrained.Rewrite
+import Test.Cardano.Ledger.Constrained.Lenses
 import Test.Cardano.Ledger.Constrained.Tests (checkPredicates)
 
 import Test.Cardano.Ledger.Constrained.Shrink
@@ -30,7 +33,13 @@ import Test.Cardano.Ledger.Constrained.Examples hiding (newepochConstraints)
 import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
-import Test.Cardano.Ledger.Generic.Proof (Reflect (..), ShelleyEra, Standard)
+import Test.Cardano.Ledger.Generic.Proof (Reflect (..), AlonzoEra, Standard)
+
+import Test.Cardano.Ledger.Shelley.Utils (testGlobals)
+import Cardano.Ledger.Shelley.API.Mempool (applyTxs, ApplyTxError(..))
+import Cardano.Ledger.Alonzo.Scripts (Prices(..))
+import Cardano.Ledger.Alonzo.Core
+
 import Test.QuickCheck hiding (getSize, total)
 
 genFromConstraints :: Era era => Proof era -> OrderInfo -> [Pred era] -> Target era t -> Gen t
@@ -153,10 +162,10 @@ shrinkNewEpochState proof st =
 
 -- Property ---------------------------------------------------------------
 
-type TestEra = ShelleyEra Standard
+type TestEra = AlonzoEra Standard
 
 testProof :: Proof TestEra
-testProof = Shelley Standard
+testProof = Alonzo Standard
 
 prop_newEpochState :: EpochStateUniv TestEra -> Property
 prop_newEpochState env =
@@ -173,9 +182,27 @@ testGenerateTx :: IO ()
 testGenerateTx = do
   env <- generate arbitrary
   nes <- generate $ genNewEpochState testProof env
-  (_tx, _) <- generate $ runGenRS testProof def $ do
+  let slot = 42
+      pp   = updatePParams testProof (esPp $ nesEs nes) (defaultCostModels testProof)
+                & ppPricesL .~ Prices minBound minBound
+  putStrLn "--- NewEpochState ---"
+  print $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
+  putStrLn "--- PParams ---"
+  print pp
+  ((utxos, tx), _) <- generate $ runGenRSWithPParams testProof pp def $ do
     modifyGenStateKeys $ const (keysUniv env)
     modifyModel $ const (abstract nes)
-    snd <$> genAlonzoTx testProof 0
-  putStrLn "Success!"
-  -- print tx
+    genAlonzoTx testProof slot
+  -- Add magic UTxOs created by the transaction generator
+  let nes1 = nes & nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL %~ (<> utxos)
+                 & nesEsL . esPpL .~ pp
+  putStrLn "--- Tx ---"
+  print tx
+  putStrLn "--- Result ---"
+  case applyTxs testGlobals slot (Seq.singleton tx) nes1 of
+    Left (ApplyTxError errs) -> do
+      putStrLn $ "No success:"
+      putStr   $ unlines [ "- " ++ show err | err <- errs ]
+    Right nes2 -> do
+      putStrLn "Success!"
+      quickCheck $ withMaxSuccess 1 $ validEpochState nes2
