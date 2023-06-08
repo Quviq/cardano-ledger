@@ -4,17 +4,15 @@ module Test.Cardano.Ledger.Constrained.LedgerTests where
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.Maybe
-import qualified Data.Sequence as Seq
-import Lens.Micro ((^.), (%~), (&), (.~))
+import Lens.Micro ((^.), (&), (.~))
 
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Env
 
 import Data.Default.Class (Default (def))
-import Test.Cardano.Ledger.Generic.GenState
-import Test.Cardano.Ledger.Generic.ModelState
-import Test.Cardano.Ledger.Generic.TxGen
 import Test.Cardano.Ledger.Generic.Updaters
+import Cardano.Slotting.Slot
+import Cardano.Protocol.TPraos.BHeader
 
 -- import Cardano.Ledger.Coin
 -- import Cardano.Ledger.Shelley
@@ -34,11 +32,19 @@ import Test.Cardano.Ledger.Constrained.Solver
 import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.Proof (Reflect (..), AlonzoEra, Standard)
+import Test.Cardano.Ledger.Alonzo.AlonzoEraGen ()
 
-import Test.Cardano.Ledger.Shelley.Utils (testGlobals)
-import Cardano.Ledger.Shelley.API.Mempool (applyTxs, ApplyTxError(..))
+-- import Test.Cardano.Ledger.Shelley.Utils (testGlobals)
+-- import Cardano.Ledger.Shelley.API.Mempool (applyTxs, ApplyTxError(..))
 import Cardano.Ledger.Alonzo.Scripts (Prices(..))
 import Cardano.Ledger.Alonzo.Core
+import Cardano.Ledger.Pretty
+import Cardano.Ledger.BaseTypes
+import Test.Cardano.Ledger.Shelley.Rules.Chain
+import Test.Cardano.Ledger.Shelley.Generator.Block
+import Test.Cardano.Ledger.Shelley.Generator.Core
+import Test.Cardano.Ledger.Shelley.Generator.Presets
+import Test.Cardano.Ledger.Shelley.Constants
 
 import Test.QuickCheck hiding (getSize, total)
 
@@ -178,31 +184,53 @@ validEpochState st = checkPredicates preds (saturateEnv env preds)
     env   = unTarget NewEpochStateR (newEpochStateT testProof) st
     preds = newepochConstraints testProof
 
+-- testTxValidForLEDGER
+-- Test.Cardano.Ledger.Shelley.Generator.genBlock
+
 testGenerateTx :: IO ()
 testGenerateTx = do
+  let keyspace = keySpace defaultConstants
   env <- generate arbitrary
-  nes <- generate $ genNewEpochState testProof env
-  let slot = 42
-      pp   = updatePParams testProof (esPp $ nesEs nes) (defaultCostModels testProof)
+  nes0 <- generate $ genNewEpochState testProof env
+  let pp   = updatePParams testProof (esPp $ nesEs nes0) (defaultCostModels testProof)
                 & ppPricesL .~ Prices minBound minBound
+      nes = nes0 & nesEsL . esPpL .~ pp
   putStrLn "--- NewEpochState ---"
-  print $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
+  print $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
   putStrLn "--- PParams ---"
   print pp
-  ((utxos, tx), _) <- generate $ runGenRSWithPParams testProof pp def $ do
-    modifyGenStateKeys $ const (keysUniv env)
-    modifyModel $ const (abstract nes)
-    genAlonzoTx testProof slot
+  let slot :: SlotNo
+      slot = 80085
+      st :: ChainState TestEra
+      st = ChainState { chainNes              = nes
+                      , chainOCertIssue       = mempty
+                      , chainEpochNonce       = NeutralNonce
+                      , chainEvolvingNonce    = NeutralNonce
+                      , chainCandidateNonce   = NeutralNonce
+                      , chainPrevEpochNonce   = NeutralNonce
+                      , chainLastAppliedBlock = At $ LastAppliedBlock 10000 slot (HashHeader def)
+                      }
+      genv :: GenEnv TestEra
+      genv = GenEnv { geKeySpace = keyspace
+                    , geScriptSpapce = ScriptSpace [] [] mempty mempty
+                    , geConstants = defaultConstants
+                    }
+  block <- generate $ genBlock genv st
+  print $ prettyA block
+  pure ()
+  -- ((utxos, tx), _) <- generate $ runGenRSWithPParams testProof pp def $ do
+  --   modifyGenStateKeys $ const (keysUniv env)
+  --   modifyModel $ const (abstract nes)
+  --   genAlonzoTx testProof slot
   -- Add magic UTxOs created by the transaction generator
-  let nes1 = nes & nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL %~ (<> utxos)
-                 & nesEsL . esPpL .~ pp
-  putStrLn "--- Tx ---"
-  print tx
-  putStrLn "--- Result ---"
-  case applyTxs testGlobals slot (Seq.singleton tx) nes1 of
-    Left (ApplyTxError errs) -> do
-      putStrLn $ "No success:"
-      putStr   $ unlines [ "- " ++ show err | err <- errs ]
-    Right nes2 -> do
-      putStrLn "Success!"
-      quickCheck $ withMaxSuccess 1 $ validEpochState nes2
+  -- let nes1 = nes & nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL %~ (<> utxos)
+  -- putStrLn "--- Tx ---"
+  -- print $ ppTx tx
+  -- putStrLn "--- Result ---"
+  -- case applyTxs testGlobals slot (Seq.singleton tx) nes1 of
+  --   Left (ApplyTxError errs) -> do
+  --     putStrLn $ "No success:"
+  --     putStr   $ unlines [ "- " ++ show err | err <- errs ]
+  --   Right nes2 -> do
+  --     putStrLn "Success!"
+  --     quickCheck $ withMaxSuccess 1 $ validEpochState nes2
