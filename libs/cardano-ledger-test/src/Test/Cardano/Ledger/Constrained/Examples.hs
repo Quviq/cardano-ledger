@@ -15,8 +15,7 @@
 module Test.Cardano.Ledger.Constrained.Examples where
 
 import Cardano.Ledger.TxIn (TxIn)
-import Cardano.Ledger.Keys (GenDelegPair, KeyHash, KeyRole (..), hashKey, coerceKeyRole)
-import Cardano.Ledger.Credential (Credential(..))
+import Cardano.Ledger.Keys (GenDelegPair, hashKey)
 import Cardano.Ledger.CertState (FutureGenDeleg (..))
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Era (Era (EraCrypto))
@@ -26,7 +25,6 @@ import Control.Monad (when)
 import qualified Data.List as List
 import Data.Set (Set)
 import Data.Map (Map)
-import qualified Data.Map as Map
 import Data.Ratio ((%))
 import qualified Data.Set as Set
 import Debug.Trace (trace)
@@ -45,6 +43,11 @@ import Test.Cardano.Ledger.Constrained.TypeRep
 import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.PrettyCore (PrettyC (..))
 import Test.Cardano.Ledger.Generic.Proof (Reflect (..), Standard, ShelleyEra)
+import Test.Cardano.Ledger.Shelley.Generator.Core
+import Test.Cardano.Ledger.Shelley.Generator.EraGen
+import Test.Cardano.Ledger.Alonzo.AlonzoEraGen ()
+import Test.Cardano.Ledger.Shelley.Generator.Presets (keySpace)
+import Test.Cardano.Ledger.Shelley.Constants (defaultConstants)
 import Test.Hspec (shouldThrow)
 import Test.QuickCheck hiding (Fixed, total)
 
@@ -555,23 +558,19 @@ test16 =
 
 data EpochStateUniv era = EpochStateUniv
   { txinUniv :: Set (TxIn (EraCrypto era))
-  , keysUniv :: Map (KeyHash 'Witness (EraCrypto era)) (KeyPair 'Witness (EraCrypto era))
+  , keysUniv :: KeySpace era
   }
 
 instance Show (EpochStateUniv era) where
   show _ = "EpochStateUniv{..}"
 
-instance Era era => Arbitrary (EpochStateUniv era) where
+instance EraGen era => Arbitrary (EpochStateUniv era) where
   arbitrary =
     EpochStateUniv
       <$> (Set.fromList <$> vectorOf 15 arbitrary)
-      <*> (Map.fromList <$> vectorOf 15 genKeyPair)
-    where
-      genKeyPair = do
-        key <- arbitrary
-        pure (hashKey $ vKey key, key)
+      <*> pure (keySpace defaultConstants)
 
-univPreds :: Proof era -> EpochStateUniv era -> [Pred era]
+univPreds :: Era era => Proof era -> EpochStateUniv era -> [Pred era]
 univPreds p EpochStateUniv{..} =
   [ Dom poolDistr :⊆: poolsUnivTm
   , Dom regPools :⊆: poolsUnivTm
@@ -602,10 +601,9 @@ univPreds p EpochStateUniv{..} =
   ]
   where
     -- TODO: script hashes
-    keyHashes = Map.keysSet keysUniv
-    credsUnivTm = Lit (SetR CredR) $ Set.mapMonotonic (KeyHashObj . coerceKeyRole) keyHashes
-    poolsUnivTm = Lit (SetR PoolHashR) $ Set.mapMonotonic coerceKeyRole keyHashes
-    genesisUnivTm = Lit (SetR GenHashR) $ Set.mapMonotonic coerceKeyRole keyHashes
+    credsUnivTm = Lit (SetR CredR) $ Set.fromList [ mkCred stakeKey | (_, stakeKey) <- ksKeyPairs keysUniv ]
+    poolsUnivTm = Lit (SetR PoolHashR) $ Set.fromList [ aikColdKeyHash keys | keys <- ksStakePools keysUniv ]
+    genesisUnivTm = Lit (SetR GenHashR) $ Set.fromList [ hashKey $ vKey key | (key, _) <- ksCoreNodes keysUniv ]
     txinUnivTm = Lit (SetR TxInR) txinUniv
 
 pstatePreds :: Proof era -> [Pred era]
@@ -655,6 +653,7 @@ utxostatePreds proof =
   [ SumsTo (Coin 1) utxoCoin EQL [Project CoinR (utxo proof)]
   , SumsTo (Coin 1) deposits EQL [SumMap stakeDeposits, SumMap poolDeposits]
   , SumsTo (Coin 1) totalAda EQL [One utxoCoin, One treasury, One reserves, One fees, One deposits, SumMap rewards]
+  , Sized (AtLeast 1) (utxo proof)
   , Random fees
   , Random (proposalsT proof)
   , Random (futureProposalsT proof)
