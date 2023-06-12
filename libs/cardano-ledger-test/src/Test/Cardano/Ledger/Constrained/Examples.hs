@@ -632,6 +632,7 @@ pstatePreds _p =
 dstatePreds :: Proof era -> [Pred era]
 dstatePreds _p =
   [ Sized (AtMost 8) rewards -- Small enough that its leaves some slack with credUniv
+  , Sized (AtLeast 1) genDelegs
   , Dom rewards :=: Dom stakeDeposits
   , Dom delegations :⊆: Dom rewards
   , Dom rewards :=: Rng ptrs
