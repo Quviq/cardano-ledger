@@ -35,6 +35,7 @@ module Test.Cardano.Ledger.Constrained.TypeRep (
 )
 where
 
+import Cardano.Ledger.Address (Addr(..))
 import Cardano.Ledger.BaseTypes (EpochNo, ProtVer (..), SlotNo (..))
 import Cardano.Ledger.Binary.Version (Version)
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
@@ -115,6 +116,7 @@ data Rep era t where
   MapR :: Ord a => Rep era a -> Rep era b -> Rep era (Map a b)
   SetR :: Ord a => Rep era a -> Rep era (Set a)
   ListR :: Rep era a -> Rep era [a]
+  AddrR :: Rep era (Addr (EraCrypto era))
   CredR :: Rep era (Credential 'Staking (EraCrypto era))
   VCredR :: Rep era (Credential 'Voting (EraCrypto era))
   PoolHashR :: Rep era (KeyHash 'StakePool (EraCrypto era))
@@ -162,6 +164,7 @@ repTypeable r = case r of
   RationalR{} -> IsTypeable
   CoinR{} -> IsTypeable
   EpochR{} -> IsTypeable
+  AddrR{} -> IsTypeable
   CredR{} -> IsTypeable
   VCredR{} -> IsTypeable
   PoolHashR{} -> IsTypeable
@@ -215,6 +218,7 @@ instance Show (Rep era t) where
   show (MapR a b) = "(Map " ++ show a ++ " " ++ show b ++ ")"
   show (SetR a) = "(Set " ++ show a ++ ")"
   show (ListR a) = "[" ++ show a ++ "]"
+  show AddrR = "Addr"
   show CredR = "(Credential 'Staking c)"
   show PoolHashR = "(KeyHash 'StakePool c)"
   show WitHashR = "(KeyHash 'Witness c)"
@@ -273,6 +277,7 @@ synopsis (ListR Word64R) x = show x
 synopsis rep@(ListR a) ll = case ll of
   [] -> "(empty::" ++ show (ListR a) ++ "]"
   (d : _) -> "[" ++ synopsis a d ++ " | size = " ++ show (length ll) ++ synSum rep ll ++ "]"
+synopsis AddrR a = show a
 synopsis CredR c = show (credSummary c)
 synopsis PoolHashR k = "(KeyHash 'PoolStake " ++ show (keyHashSummary k) ++ ")"
 synopsis GenHashR k = "(KeyHash 'Genesis " ++ show (keyHashSummary k) ++ ")"
@@ -381,6 +386,7 @@ instance Shaped (Rep era) any where
   shape VHashR = Nullary 40
   shape CommColdHashR = Nullary 41
   shape CommHotHashR = Nullary 42
+  shape AddrR = Nullary 41
 
 compareRep :: forall era t s. Era era => Rep era t -> Rep era s -> Ordering
 compareRep x y = cmpIndex @(Rep era) x y
@@ -399,6 +405,7 @@ genSizedRep n r@(MapR a b) = do
 genSizedRep n r@(SetR a) = do
   setSized ["From genSizedRep " ++ show r] n (genSizedRep n a)
 genSizedRep n (ListR a) = vectorOf n (genSizedRep n a)
+genSizedRep _ AddrR = arbitrary
 genSizedRep _ CredR = arbitrary
 genSizedRep _ PoolHashR = arbitrary
 genSizedRep _ WitHashR = arbitrary
@@ -473,6 +480,7 @@ shrinkRep (_ :-> _) _ = []
 shrinkRep (MapR a b) t = shrinkMapBy Map.fromList Map.toList (shrinkRep $ ListR (PairR a b)) t
 shrinkRep (SetR a) t = shrinkMapBy Set.fromList Set.toList (shrinkRep $ ListR a) t
 shrinkRep (ListR a) t = shrinkList (shrinkRep a) t
+shrinkRep AddrR a = shrink a
 shrinkRep CredR t = shrink t
 shrinkRep PoolHashR t = shrink t
 shrinkRep WitHashR t = shrink t
