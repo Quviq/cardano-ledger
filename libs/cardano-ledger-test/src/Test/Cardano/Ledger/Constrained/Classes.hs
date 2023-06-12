@@ -30,6 +30,7 @@ import qualified Data.List as List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe.Strict (StrictMaybe (SJust))
+import Data.Maybe (isNothing)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Word (Word64)
@@ -60,6 +61,7 @@ import Test.QuickCheck (
   elements,
   frequency,
   shuffle,
+  suchThat,
   vectorOf,
  )
 
@@ -223,9 +225,11 @@ instance (Reflect era) => Sums (TxOutF era) Coin where
   getSum (TxOutF _ txout) = coin (txout ^. valueTxOutL)
   genT _ cn = genTxOutX reify cn
 
-genTxOutX :: Reflect era => Proof era -> Coin -> Gen (TxOutF era)
+genTxOutX :: forall era. Reflect era => Proof era -> Coin -> Gen (TxOutF era)
 genTxOutX p coins = do
-  txout <- case p of
+  let notBootstrap :: Gen (TxOut era) -> Gen (TxOut era)
+      notBootstrap txoutGen = suchThat txoutGen $ \ txout -> isNothing (txout ^. bootAddrTxOutF)
+  txout <- notBootstrap $ case p of
     Shelley _ -> arbitrary
     Allegra _ -> arbitrary
     Mary _ -> arbitrary
