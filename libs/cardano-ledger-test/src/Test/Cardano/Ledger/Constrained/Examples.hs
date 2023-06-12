@@ -14,12 +14,16 @@
 
 module Test.Cardano.Ledger.Constrained.Examples where
 
+import Cardano.Ledger.Address
+import Cardano.Ledger.BaseTypes
+import Cardano.Ledger.Core
+import Cardano.Ledger.Credential
 import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Ledger.Keys (GenDelegPair, hashKey)
 import Cardano.Ledger.CertState (FutureGenDeleg (..))
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
-import Cardano.Ledger.Era (Era (EraCrypto))
-import Cardano.Ledger.Shelley.Rewards (Reward (..))
+-- import Cardano.Ledger.Era (Era (EraCrypto))
+-- import Cardano.Ledger.Shelley.Rewards (Reward (..))
 import Control.Exception (ErrorCall (..))
 import Control.Monad (when)
 import qualified Data.List as List
@@ -30,7 +34,7 @@ import qualified Data.Set as Set
 import Debug.Trace (trace)
 import Test.Cardano.Ledger.Core.KeyPair (KeyPair(..))
 import Test.Cardano.Ledger.Constrained.Ast
-import Test.Cardano.Ledger.Constrained.Classes (Adds (..), Sums (genT))
+import Test.Cardano.Ledger.Constrained.Classes (Adds (..), Sums (genT), txOutL)
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Lenses (fGenDelegGenKeyHashL)
 import Test.Cardano.Ledger.Constrained.Monad
@@ -570,7 +574,7 @@ instance EraGen era => Arbitrary (EpochStateUniv era) where
       <$> (Set.fromList <$> vectorOf 15 arbitrary)
       <*> pure (keySpace defaultConstants)
 
-univPreds :: Era era => Proof era -> EpochStateUniv era -> [Pred era]
+univPreds :: forall era. EraTxOut era => Proof era -> EpochStateUniv era -> [Pred era]
 univPreds p EpochStateUniv{..} =
   [ Dom poolDistr :⊆: poolsUnivTm
   , Dom regPools :⊆: poolsUnivTm
@@ -598,6 +602,7 @@ univPreds p EpochStateUniv{..} =
   , Dom (futureProposalsT p) :⊆: genesisUnivTm
   , Dom genDelegs :⊆: genesisUnivTm
   , Dom (utxo p) :⊆: txinUnivTm
+  , Rng (ProjM (txOutL . addrTxOutL @era) AddrR (utxo p)) :⊆: addrUnivTm
   ]
   where
     -- TODO: script hashes
@@ -605,6 +610,10 @@ univPreds p EpochStateUniv{..} =
     poolsUnivTm = Lit (SetR PoolHashR) $ Set.fromList [ aikColdKeyHash keys | keys <- ksStakePools keysUniv ]
     genesisUnivTm = Lit (SetR GenHashR) $ Set.fromList [ hashKey $ vKey key | (key, _) <- ksCoreNodes keysUniv ]
     txinUnivTm = Lit (SetR TxInR) txinUniv
+    addrUnivTm :: Term era (Set (Addr (EraCrypto era)))
+    addrUnivTm = Lit (SetR AddrR) $ Set.fromList [ Addr Testnet (mkCred payKey) (StakeRefBase $ mkCred stakeKey)
+                                                 | (payKey, stakeKey) <- ksKeyPairs keysUniv ]
+                                         -- and scripts
 
 pstatePreds :: Proof era -> [Pred era]
 pstatePreds _p =
