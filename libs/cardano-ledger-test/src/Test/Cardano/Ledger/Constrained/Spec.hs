@@ -18,6 +18,8 @@
 --   (Size)                denotes Gen Int, the size of some Map, Set, List etc.
 module Test.Cardano.Ledger.Constrained.Spec where
 
+import Lens.Micro (Lens', (^.), (&), (.~))
+import Control.Monad (forM)
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Core (Era (..))
 import qualified Data.List as List
@@ -657,6 +659,12 @@ data RngSpec era rng where
   RngElem :: Eq r => Rep era r -> [r] -> RngSpec era r
   -- | The range must hold on the relation specified
   RngRel :: Ord x => RelSpec era x -> RngSpec era x
+  -- | Constraints on a component of the elements.
+  RngComponent :: Eq c
+          => Rep era c
+          -> Lens' d c  -- TODO: Field instead of Lens?
+          -> [c]        -- ^ The projections must come from this list.
+          -> RngSpec era d
   -- | There are no constraints on the range (random generator will do)
   RngAny :: RngSpec era rng
   -- | Something was inconsistent
@@ -682,6 +690,7 @@ showRngSpec (RngSum small sz) = sepsP ["RngSum", show small, show sz]
 showRngSpec (RngProj small r sz) = sepsP ["RngProj", show small, show r, show sz]
 showRngSpec (RngElem r cs) = sepsP ["RngElem", show r, synopsis (ListR r) cs]
 showRngSpec (RngRel x) = sepsP ["RngRel", show x]
+showRngSpec (RngComponent r _ y) = sepsP ["RngComponent", synopsis (ListR r) y]
 showRngSpec RngAny = "RngAny"
 showRngSpec (RngNever _) = "RngNever"
 
@@ -730,6 +739,7 @@ sizeForRng (RngProj small (_r :: (Rep era c)) sz) =
 sizeForRng (RngElem _ xs) = SzExact (length xs)
 sizeForRng RngAny = SzAny
 sizeForRng (RngNever _) = SzAny
+sizeForRng (RngComponent _ _ _) = SzAny
 
 -- ------------------------------------------
 -- generators for test functions.
@@ -749,6 +759,11 @@ genFromRngSpec msgs genr n x = case x of
     mapM (genT msgs) rs
   (RngRel relspec) -> Set.toList <$> genFromRelSpec (msg : msgs) genr n relspec
   (RngElem _ xs) -> pure xs
+  RngComponent _ proj may -> do
+    projs <- vectorOf n $ elements may
+    forM projs $ \ v -> do
+      t <- genr
+      pure $ t & proj .~ v
   where
     msg = "genFromRngSpec " ++ show n ++ " " ++ show x
 
@@ -793,6 +808,7 @@ runRngSpec ll (RngElem _ xs) = ll == xs
 runRngSpec ll (RngSum _ sz) = runSize (toI (sumAdds ll)) sz
 runRngSpec ll (RngProj _ _ sz) = runSize (toI (projAdds ll)) sz
 runRngSpec ll (RngRel rspec) = runRelSpec (Set.fromList ll) rspec
+runRngSpec ll (RngComponent _ proj may) = all (`elem` may) (map (^. proj) ll)
 
 -- ------------------------------------------
 -- generators for RngSpec
@@ -836,6 +852,7 @@ genConsistentRngSpec n g repw repc = do
         , (1, pure $ RngProj (fromI msgs 1) repc (SzExact (toI (projAdds xs))))
         ]
     RngNever xs -> errorMess "RngNever in genConsistentRngSpec" xs
+    RngComponent{} -> pure RngAny   -- TODO
   pure (x1, x2)
   where
     msgs = [seps ["genConsistentRngSpec", show repw, show repc]]

@@ -333,6 +333,9 @@ data TxOutF era where
 unTxOut :: TxOutF era -> TxOut era
 unTxOut (TxOutF _ x) = x
 
+txOutL :: Lens' (TxOutF era) (TxOut era)
+txOutL = lens unTxOut $ \(TxOutF p _) txout -> TxOutF p txout
+
 -- ======
 data ValueF era where
   ValueF :: Proof era -> Value era -> ValueF era

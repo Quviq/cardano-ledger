@@ -98,6 +98,7 @@ hasOrd rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
     help r@(ListR a) l = do
       With _ <- help a (err a (show r))
       pure $ With l
+    help AddrR a = pure $ With a
     help CredR c = pure $ With c
     help PoolHashR p = pure $ With p
     help GenHashR p = pure $ With p
@@ -317,6 +318,11 @@ solveMap v1@(V _ r@(MapR dom rng) _) predicate = explain msg $ case predicate of
     With _ <- hasOrd rng rng
     With set <- simplifySet rng expr
     mapSpec SzAny RelAny (RngRel $ relDisjoint rng set)
+  Rng (ProjM l prj (Var v2)) `Subset` expr | Name v1 == Name v2 -> do
+    let MapR _ rng' = termRep (Var v2)
+    Refl <- sameRep rng rng'
+    With may <- simplifySet prj expr
+    mapSpec SzAny RelAny (RngComponent prj l $ Set.toList may)
   other -> failT ["Cannot solve map condition: " ++ show other]
   where
     msg = ("Solving for " ++ show v1 ++ " Predicate \n   " ++ show predicate)
