@@ -663,7 +663,7 @@ utxostatePreds proof =
   [ SumsTo (Coin 1) utxoCoin EQL [Project CoinR (utxo proof)]
   , SumsTo (Coin 1) deposits EQL [SumMap stakeDeposits, SumMap poolDeposits]
   , SumsTo (Coin 1) totalAda EQL [One utxoCoin, One treasury, One reserves, One fees, One deposits, SumMap rewards]
-  , Sized (AtLeast 1) (utxo proof)
+  , Sized (AtLeast 10) (utxo proof)
   , Random fees
   , Random (proposalsT proof)
   , Random (futureProposalsT proof)
