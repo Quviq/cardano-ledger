@@ -1,9 +1,12 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeApplications #-}
 module Test.Cardano.Ledger.Constrained.LedgerTests where
 
+import Control.Monad
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.Maybe
+import Data.Maybe.Strict
 import Lens.Micro ((^.), (&), (.~))
 
 import Test.Cardano.Ledger.Constrained.Ast
@@ -38,7 +41,9 @@ import Test.Cardano.Ledger.Alonzo.AlonzoEraGen ()
 -- import Cardano.Ledger.Shelley.API.Mempool (applyTxs, ApplyTxError(..))
 import Cardano.Ledger.Alonzo.Scripts (Prices(..))
 import Cardano.Ledger.Alonzo.Core
+import Cardano.Ledger.Alonzo.PParams
 import Cardano.Ledger.Pretty
+import Cardano.Ledger.Coin
 import Cardano.Ledger.BaseTypes
 import Test.Cardano.Ledger.Shelley.Rules.Chain
 import Test.Cardano.Ledger.Shelley.Generator.Block
@@ -188,19 +193,29 @@ validEpochState st = checkPredicates preds (saturateEnv env preds)
 -- Test.Cardano.Ledger.Shelley.Generator.genBlock
 
 testGenerateTx :: IO ()
-testGenerateTx = do
-  let keyspace = keySpace defaultConstants
+testGenerateTx = do -- quickCheck prop_generateTx
   env <- generate arbitrary
+  let keyspace = keySpace defaultConstants
   nes0 <- generate $ genNewEpochState testProof env
-  let pp   = updatePParams testProof (esPp $ nesEs nes0) (defaultCostModels testProof)
-                & ppPricesL .~ Prices minBound minBound
+  feeA <- generate $ choose (1, 100)
+  minAda <- generate $ choose (1, 10)
+  maxValSize <- generate $ choose (3000, 5000 :: Int)
+  let pp   = applyPPUpdates
+                (updatePParams testProof (esPp $ nesEs nes0) (defaultCostModels testProof)
+                  & ppPricesL .~ Prices minBound minBound
+                  & ppMinFeeAL .~ Coin feeA
+                  & ppCoinsPerUTxOWordL .~ CoinPerWord (Coin minAda)
+                  & ppMaxValSizeL .~ fromIntegral maxValSize
+                )
+                (PParamsUpdate $ (emptyPParamsStrictMaybe @TestEra) { appD = SJust minBound })
       nes = nes0 & nesEsL . esPpL .~ pp
-  putStrLn "--- NewEpochState ---"
+  putStrLn "--- UTxO set ---"
   print $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
   putStrLn "--- PParams ---"
   print pp
   let slot :: SlotNo
-      slot = 80085
+      slot = 3551
+      hh = HashHeader def
       st :: ChainState TestEra
       st = ChainState { chainNes              = nes
                       , chainOCertIssue       = mempty
@@ -208,16 +223,57 @@ testGenerateTx = do
                       , chainEvolvingNonce    = NeutralNonce
                       , chainCandidateNonce   = NeutralNonce
                       , chainPrevEpochNonce   = NeutralNonce
-                      , chainLastAppliedBlock = At $ LastAppliedBlock 10000 slot (HashHeader def)
+                      , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
                       }
       genv :: GenEnv TestEra
       genv = GenEnv { geKeySpace = keyspace
                     , geScriptSpapce = ScriptSpace [] [] mempty mempty
                     , geConstants = defaultConstants
                     }
+  print hh
+  -- trace "next test case ---------->" $
   block <- generate $ genBlock genv st
-  print $ prettyA block
-  pure ()
+  -- counterexample (show $ prettyA block) $
+  when (length (show $ prettyA block) >= 0) $ putStrLn "Success!"
+
+prop_generateTx :: EpochStateUniv TestEra -> Property
+prop_generateTx env =
+  forAllBlind (genNewEpochState testProof env) $ \ nes0 ->
+    let pp   = applyPPUpdates
+                  (updatePParams testProof (esPp $ nesEs nes0) (defaultCostModels testProof)
+                    & ppPricesL .~ Prices minBound minBound)
+                  (PParamsUpdate $ (emptyPParamsStrictMaybe @TestEra) { appD = SJust minBound })
+        nes = nes0 & nesEsL . esPpL .~ pp
+    in
+    -- counterexample "--- NewEpochState ---" $
+    -- counterexample (show $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL) $
+    -- counterexample "--- PParams ---" $
+    -- counterexample (show pp) $
+    let slot :: SlotNo
+        slot = 3551
+        hh = HashHeader def
+        st :: ChainState TestEra
+        st = ChainState { chainNes              = nes
+                        , chainOCertIssue       = mempty
+                        , chainEpochNonce       = NeutralNonce
+                        , chainEvolvingNonce    = NeutralNonce
+                        , chainCandidateNonce   = NeutralNonce
+                        , chainPrevEpochNonce   = NeutralNonce
+                        , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
+                        }
+        genv :: GenEnv TestEra
+        genv = GenEnv { geKeySpace = keyspace
+                      , geScriptSpapce = ScriptSpace [] [] mempty mempty
+                      , geConstants = defaultConstants
+                      }
+    in
+    -- trace "next test case ---------->" $
+    forAllBlind (genBlock genv st) $ \ block ->
+    -- counterexample (show $ prettyA block) $
+    length (show $ prettyA block) >= 0
+  where
+    keyspace = keySpace defaultConstants
+
   -- ((utxos, tx), _) <- generate $ runGenRSWithPParams testProof pp def $ do
   --   modifyGenStateKeys $ const (keysUniv env)
   --   modifyModel $ const (abstract nes)
@@ -234,3 +290,18 @@ testGenerateTx = do
   --   Right nes2 -> do
   --     putStrLn "Success!"
   --     quickCheck $ withMaxSuccess 1 $ validEpochState nes2
+
+-- type R a = Int -> a
+
+-- wtf' :: Maybe (Int, [Int])
+-- wtf' = step2 <$> Just 1
+--   where
+--     step1 :: R ([Int] -> (Int, [Int]))
+--     step1 = (,) <$> pure 1
+
+--     singleton :: R [Int]
+--     singleton = (:[])
+
+--     step2 :: R (Int, [Int])
+--     step2 = step1 <*> singleton
+
