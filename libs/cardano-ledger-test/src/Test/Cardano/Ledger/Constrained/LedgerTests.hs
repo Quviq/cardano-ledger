@@ -1,5 +1,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DataKinds #-}
 module Test.Cardano.Ledger.Constrained.LedgerTests where
 
 import Control.Monad
@@ -7,7 +10,7 @@ import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.Maybe.Strict
-import Lens.Micro ((^.), (&), (.~))
+import Lens.Micro ((^.), (&), (.~), (%~))
 
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Env
@@ -154,13 +157,32 @@ newepochConstraints pr =
   ++ epochstatePreds pr
   ++ newepochstatePreds pr
 
-genNewEpochState :: Reflect era => Proof era -> EpochStateUniv era -> Gen (NewEpochState era)
-genNewEpochState proof env =
-  genFromConstraints
-    proof
-    standardOrderInfo {sumBeforeParts = False}
-    (univPreds proof env ++ newepochConstraints proof)
-    (newEpochStateT proof)
+genNewEpochState :: forall era. (AlonzoEraPParams era, ExactEra AlonzoEra era, Reflect era)
+                 => Proof era
+                 -> EpochStateUniv era
+                 -> Gen (NewEpochState era)
+genNewEpochState proof env = do
+  nes <- genFromConstraints
+            proof
+            standardOrderInfo {sumBeforeParts = False}
+            (univPreds proof env ++ newepochConstraints proof)
+            (newEpochStateT proof)
+  -- Fix up issues with PParams generator
+  feeA   <- choose (1, 100)
+  minAda <- choose (1, 10)
+  let pp = applyPPUpdates
+                (updatePParams proof (esPp $ nesEs nes) (defaultCostModels proof)
+                  & ppPricesL .~ Prices minBound minBound
+                  & ppMinFeeAL .~ Coin feeA
+                  & ppCoinsPerUTxOWordL .~ CoinPerWord (Coin minAda)
+                  & ppMaxValSizeL .~ 4000
+                  & ppProtocolVersionL %~ \ ver -> ver{ pvMajor = natVersion @5 } -- TODO
+                ) ppu
+      ppu = case proof of
+              Alonzo _ -> PParamsUpdate $ (emptyPParamsStrictMaybe @era) { appD = SJust minBound }
+              _        -> PParamsUpdate (emptyPParamsStrictMaybe @era)
+
+  pure $ nes & nesEsL . esPpL .~ pp
 
 shrinkNewEpochState :: Reflect era => Proof era -> NewEpochState era -> [NewEpochState era]
 shrinkNewEpochState proof st =
@@ -194,25 +216,15 @@ validEpochState st = checkPredicates preds (saturateEnv env preds)
 
 testGenerateTx :: IO ()
 testGenerateTx = do -- quickCheck prop_generateTx
-  env <- generate arbitrary
-  let keyspace = keySpace defaultConstants
-  nes0 <- generate $ genNewEpochState testProof env
-  feeA <- generate $ choose (1, 100)
-  minAda <- generate $ choose (1, 10)
-  maxValSize <- generate $ choose (3000, 5000 :: Int)
-  let pp   = applyPPUpdates
-                (updatePParams testProof (esPp $ nesEs nes0) (defaultCostModels testProof)
-                  & ppPricesL .~ Prices minBound minBound
-                  & ppMinFeeAL .~ Coin feeA
-                  & ppCoinsPerUTxOWordL .~ CoinPerWord (Coin minAda)
-                  & ppMaxValSizeL .~ fromIntegral maxValSize
-                )
-                (PParamsUpdate $ (emptyPParamsStrictMaybe @TestEra) { appD = SJust minBound })
-      nes = nes0 & nesEsL . esPpL .~ pp
+  env0 <- generate arbitrary
+  let genv = genEnv undefined defaultConstants
+      keyspace = geKeySpace genv
+      env = env0 { keysUniv = keyspace }
+  nes <- generate $ genNewEpochState testProof env
   putStrLn "--- UTxO set ---"
   print $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
   putStrLn "--- PParams ---"
-  print pp
+  print $ nes ^. nesEsL . esPpL
   let slot :: SlotNo
       slot = 3551
       hh = HashHeader def
@@ -225,11 +237,6 @@ testGenerateTx = do -- quickCheck prop_generateTx
                       , chainPrevEpochNonce   = NeutralNonce
                       , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
                       }
-      genv :: GenEnv TestEra
-      genv = GenEnv { geKeySpace = keyspace
-                    , geScriptSpapce = ScriptSpace [] [] mempty mempty
-                    , geConstants = defaultConstants
-                    }
   print hh
   -- trace "next test case ---------->" $
   block <- generate $ genBlock genv st
@@ -237,14 +244,8 @@ testGenerateTx = do -- quickCheck prop_generateTx
   when (length (show $ prettyA block) >= 0) $ putStrLn "Success!"
 
 prop_generateTx :: EpochStateUniv TestEra -> Property
-prop_generateTx env =
-  forAllBlind (genNewEpochState testProof env) $ \ nes0 ->
-    let pp   = applyPPUpdates
-                  (updatePParams testProof (esPp $ nesEs nes0) (defaultCostModels testProof)
-                    & ppPricesL .~ Prices minBound minBound)
-                  (PParamsUpdate $ (emptyPParamsStrictMaybe @TestEra) { appD = SJust minBound })
-        nes = nes0 & nesEsL . esPpL .~ pp
-    in
+prop_generateTx env0 =
+  forAllBlind (genNewEpochState testProof env) $ \ nes ->
     -- counterexample "--- NewEpochState ---" $
     -- counterexample (show $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL) $
     -- counterexample "--- PParams ---" $
@@ -261,47 +262,13 @@ prop_generateTx env =
                         , chainPrevEpochNonce   = NeutralNonce
                         , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
                         }
-        genv :: GenEnv TestEra
-        genv = GenEnv { geKeySpace = keyspace
-                      , geScriptSpapce = ScriptSpace [] [] mempty mempty
-                      , geConstants = defaultConstants
-                      }
     in
     -- trace "next test case ---------->" $
     forAllBlind (genBlock genv st) $ \ block ->
     -- counterexample (show $ prettyA block) $
     length (show $ prettyA block) >= 0
   where
-    keyspace = keySpace defaultConstants
-
-  -- ((utxos, tx), _) <- generate $ runGenRSWithPParams testProof pp def $ do
-  --   modifyGenStateKeys $ const (keysUniv env)
-  --   modifyModel $ const (abstract nes)
-  --   genAlonzoTx testProof slot
-  -- Add magic UTxOs created by the transaction generator
-  -- let nes1 = nes & nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL %~ (<> utxos)
-  -- putStrLn "--- Tx ---"
-  -- print $ ppTx tx
-  -- putStrLn "--- Result ---"
-  -- case applyTxs testGlobals slot (Seq.singleton tx) nes1 of
-  --   Left (ApplyTxError errs) -> do
-  --     putStrLn $ "No success:"
-  --     putStr   $ unlines [ "- " ++ show err | err <- errs ]
-  --   Right nes2 -> do
-  --     putStrLn "Success!"
-  --     quickCheck $ withMaxSuccess 1 $ validEpochState nes2
-
--- type R a = Int -> a
-
--- wtf' :: Maybe (Int, [Int])
--- wtf' = step2 <$> Just 1
---   where
---     step1 :: R ([Int] -> (Int, [Int]))
---     step1 = (,) <$> pure 1
-
---     singleton :: R [Int]
---     singleton = (:[])
-
---     step2 :: R (Int, [Int])
---     step2 = step1 <*> singleton
+    genv = genEnv undefined defaultConstants
+    keyspace = geKeySpace genv
+    env = env0 { keysUniv = keyspace }
 
