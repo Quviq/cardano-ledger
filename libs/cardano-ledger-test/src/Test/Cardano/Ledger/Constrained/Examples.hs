@@ -615,12 +615,21 @@ univPreds p EpochStateUniv{..} =
                                                  | (payKey, stakeKey) <- ksKeyPairs keysUniv ]
                                          -- and scripts
 
-pstatePreds :: Proof era -> [Pred era]
-pstatePreds _p =
+-- These constraints control generation but are not requirements on valid ledger states.
+sizePreds :: Proof era -> [Pred era]
+sizePreds proof =
   [ Sized (AtMost 3) (Dom futureRegPools) -- See comments in test8 why we need these Fixed predicates
   , Sized (Range 5 6) (Dom retiring) -- we need       retiring :⊆: regPools        :⊆: poolsUinv
   , Sized (AtLeast 9) (Dom regPools) -- AND we need                 futureRegPools  :⊆: poolsUniv
-  , Dom regPools :=: Dom poolDistr
+  , Sized (AtMost 8) rewards -- Small enough that its leaves some slack with credUniv
+  , Sized (AtLeast 10) (utxo proof)
+  , Sized (ExactSize 8) (Dom prevBlocksMade) -- Both prevBlocksMade and prevBlocksMadeDom will have size 8
+  , Sized (ExactSize 8) (Dom currBlocksMade)
+  ]
+
+pstatePreds :: Proof era -> [Pred era]
+pstatePreds _p =
+  [ Dom regPools :=: Dom poolDistr
   , Dom regPools :=: Dom poolDeposits
   , Dom retiring :⊆: Dom regPools
   , -- , Dom futureRegPools :⊆: Dom poolDistr  -- Don't think we want this
@@ -631,8 +640,7 @@ pstatePreds _p =
 
 dstatePreds :: Proof era -> [Pred era]
 dstatePreds _p =
-  [ Sized (AtMost 8) rewards -- Small enough that its leaves some slack with credUniv
-  , Sized (AtLeast 1) genDelegs
+  [ Sized (AtLeast 1) genDelegs
   , Dom rewards :=: Dom stakeDeposits
   , Dom delegations :⊆: Dom rewards
   , Dom rewards :=: Rng ptrs
@@ -663,7 +671,6 @@ utxostatePreds proof =
   [ SumsTo (Coin 1) utxoCoin EQL [Project CoinR (utxo proof)]
   , SumsTo (Coin 1) deposits EQL [SumMap stakeDeposits, SumMap poolDeposits]
   , SumsTo (Coin 1) totalAda EQL [One utxoCoin, One treasury, One reserves, One fees, One deposits, SumMap rewards]
-  , Sized (AtLeast 10) (utxo proof)
   , Random fees
   , Random (proposalsT proof)
   , Random (futureProposalsT proof)
@@ -700,14 +707,13 @@ epochstatePreds proof =
 newepochstatePreds :: Reflect era => Proof era -> [Pred era]
 newepochstatePreds _proof =
   [ Random epochNo
-  , Sized (ExactSize 8) (Dom prevBlocksMade) -- Both prevBlocksMade and prevBlocksMadeDom will have size 8
-  , Sized (ExactSize 8) (Dom currBlocksMade)
   , SumsTo (1 % 1000) (Lit RationalR 1) EQL [Project RationalR poolDistr]
   ]
 
 newepochConstraints :: Reflect era => Proof era -> EpochStateUniv era -> [Pred era]
 newepochConstraints pr env =
   univPreds pr env
+    ++ sizePreds pr
     ++ pstatePreds pr
     ++ dstatePreds pr
     ++ utxostatePreds pr
