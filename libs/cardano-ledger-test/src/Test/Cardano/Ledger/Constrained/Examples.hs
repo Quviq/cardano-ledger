@@ -684,10 +684,12 @@ epochstatePreds proof =
   , Random (prevpparams proof)
   , Random (pparams proof)
   , Sized (AtLeast 1) (maxBHSize proof)
-  , Sized (AtLeast 20000) (maxTxSize proof)
+    -- Shelley/Alonzo protocol params
+  , maxTxSize proof :=: Lit NaturalR 16384
+  , maxBHSize proof :=: Lit NaturalR 1100
+  , maxBBSize proof :=: Lit NaturalR 65536
   , -- , Random (maxBBSize proof) -- This will cause underflow on Natural
     SumsTo (1 % 1000) (Lit RationalR 1) EQL [Project RationalR markPoolDistr]
-  , SumsTo 1 (maxBBSize proof) LTE [One (maxBHSize proof), One (maxTxSize proof)]
   , Component
       (pparams proof)
       [field pp (maxTxSize proof), field pp (maxBHSize proof), field pp (maxBBSize proof)]
