@@ -102,16 +102,17 @@ saturateEnv env0 preds = go env0 preds
       | Just (x, v) <- solveUnknown env p = saturateEnv (storeName x v env) preds
       | otherwise                         = go env ps
 
-solveUnknown :: Era era => Env era -> Pred era -> Maybe (Name era, Payload era)
+solveUnknown :: forall era. Era era => Env era -> Pred era -> Maybe (Name era, Payload era)
 solveUnknown env p = case p of
 
   SumsTo _ (Var x@(V _ rep acc)) EQL sums
     | unknown (Name x)
-    , all known $ foldl varsOfSum mempty sums
-    , Right v <- runTyped (sumAdds <$> mapM (runSum env) sums) -> Just (Name x, Payload rep v acc)
+    , knownSums sums
+    , Right v <- runTyped (sumAdds <$> mapM (runSum env) sums) ->
+      Just (Name x, Payload rep v acc)
 
   Component tm (AnyF (Field s rep acc@(Yes _ lens)) : _)
-    | all known (varsOfTerm mempty tm)
+    | knownTerm tm
     , unknown x
     , Right r <- runTyped (runTerm env tm) ->
         Just (x, Payload rep (r ^. lens) acc)
@@ -121,11 +122,27 @@ solveUnknown env p = case p of
   Component r (_ : flds) ->
     solveUnknown env (Component r flds)
 
+  tm :=: Var x@(V _ rep acc)
+    | knownTerm tm
+    , unknown (Name x)
+    , Right v <- runTyped (runTerm env tm) ->
+      Just (Name x, Payload rep v acc)
+
+  Var x@(V _ rep acc) :=: tm
+    | knownTerm tm
+    , unknown (Name x)
+    , Right v <- runTyped (runTerm env tm) ->
+      Just (Name x, Payload rep v acc)
+
   _ -> Nothing
 
   where
     known   = isJust . flip findName env
     unknown = not . known
+    knownTerm :: forall t. Term era t -> Bool
+    knownTerm = all known . varsOfTerm mempty
+    knownSums :: forall r. [Sum era r] -> Bool
+    knownSums = all known . foldl varsOfSum mempty
 
 -- NewEpochState generator ------------------------------------------------
 
