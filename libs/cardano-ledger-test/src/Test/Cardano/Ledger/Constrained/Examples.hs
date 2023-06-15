@@ -629,7 +629,7 @@ sizePreds proof =
 
 pstatePreds :: Proof era -> [Pred era]
 pstatePreds _p =
-  [ Dom regPools :=: Dom poolDistr
+  [ Dom poolDistr :⊆: Dom regPools
   , Dom regPools :=: Dom poolDeposits
   , Dom retiring :⊆: Dom regPools
   , -- , Dom futureRegPools :⊆: Dom poolDistr  -- Don't think we want this
