@@ -625,6 +625,7 @@ sizePreds proof =
   , Sized (AtLeast 10) (utxo proof)
   , Sized (ExactSize 8) (Dom prevBlocksMade) -- Both prevBlocksMade and prevBlocksMadeDom will have size 8
   , Sized (ExactSize 8) (Dom currBlocksMade)
+  , Disjoint (Dom futureRegPools) (Dom retiring)
   ]
 
 pstatePreds :: Proof era -> [Pred era]
@@ -632,8 +633,7 @@ pstatePreds _p =
   [ Dom poolDistr :⊆: Dom regPools
   , Dom regPools :=: Dom poolDeposits
   , Dom retiring :⊆: Dom regPools
-  , -- , Dom futureRegPools :⊆: Dom poolDistr  -- Don't think we want this
-    Disjoint (Dom futureRegPools) (Dom retiring)
+   -- , Dom futureRegPools :⊆: Dom poolDistr  -- Don't think we want this
   , Random dreps
   , Random ccHotKeys
   ]
