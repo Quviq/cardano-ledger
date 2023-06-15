@@ -6,9 +6,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Test.Cardano.Ledger.Constrained.LedgerTests where
 
+import Control.Monad.Reader (runReaderT)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.List (find)
@@ -16,6 +19,10 @@ import Data.Maybe
 import Data.Maybe.Strict
 import Lens.Micro ((^.), (&), (.~), (%~))
 import Control.State.Transition.Extended
+import Control.State.Transition.Trace.Generator.QuickCheck
+import Control.State.Transition.Trace (Trace, SourceSignalTarget(SourceSignalTarget), sourceSignalTargets)
+import Data.Proxy
+import Data.Word
 
 import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Env
@@ -23,18 +30,20 @@ import Test.Cardano.Ledger.Constrained.Env
 import Data.Default.Class (Default (def))
 import Test.Cardano.Ledger.Generic.Updaters
 import Cardano.Slotting.Slot
+import Cardano.Protocol.TPraos.API
 import Cardano.Protocol.TPraos.BHeader
+import Cardano.Protocol.TPraos.Rules.Tickn
 
 -- import Cardano.Ledger.Coin
 -- import Cardano.Ledger.Shelley
 -- import Cardano.Ledger.Era (Era)
-import Cardano.Ledger.Shelley.LedgerState (NewEpochState(..), EpochState(..))
+-- import Cardano.Ledger.Shelley.LedgerState (NewEpochState(..), EpochState(..))
 import Test.Cardano.Ledger.Constrained.Classes
 import Test.Cardano.Ledger.Constrained.Monad
 import Test.Cardano.Ledger.Constrained.Size
 import Test.Cardano.Ledger.Constrained.Rewrite
 import Test.Cardano.Ledger.Constrained.Lenses
-import Test.Cardano.Ledger.Constrained.Tests (checkPredicates, showEnv)
+import Test.Cardano.Ledger.Constrained.Tests (checkPredicates)
 
 import Test.Cardano.Ledger.Constrained.Shrink
 
@@ -49,6 +58,7 @@ import Test.Cardano.Ledger.Alonzo.EraMapping ()
 
 -- import Test.Cardano.Ledger.Shelley.Utils (testGlobals)
 -- import Cardano.Ledger.Shelley.API.Mempool (applyTxs, ApplyTxError(..))
+import Cardano.Ledger.BHeaderView
 import Cardano.Ledger.Alonzo.Scripts (Prices(..))
 import Cardano.Ledger.Alonzo.Core
 import Cardano.Ledger.Alonzo.PParams
@@ -59,10 +69,14 @@ import Cardano.Ledger.Coin
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.PoolDistr
 import Cardano.Ledger.Keys
+import Cardano.Ledger.Shelley.Rules
+import Cardano.Ledger.Shelley.API hiding (stake)
+import Test.Cardano.Ledger.Shelley.ConcreteCryptoTypes (Mock)
 import Test.Cardano.Ledger.Shelley.Rules.Chain
 import Test.Cardano.Ledger.Shelley.Generator.Block
 import Test.Cardano.Ledger.Shelley.Generator.Core
 import Test.Cardano.Ledger.Shelley.Generator.Presets
+import Test.Cardano.Ledger.Shelley.Generator.EraGen
 import Test.Cardano.Ledger.Shelley.Constants
 import Test.Cardano.Ledger.Shelley.Utils
 
@@ -188,13 +202,13 @@ newepochConstraints pr =
 
 genNewEpochState :: forall era. (AlonzoEraPParams era, ExactEra AlonzoEra era, Reflect era)
                  => Proof era
-                 -> EpochStateUniv era
+                 -> KeySpace era
                  -> Gen (NewEpochState era)
-genNewEpochState proof env = do
+genNewEpochState proof keys = do
   nes <- genFromConstraints
             proof
             standardOrderInfo {sumBeforeParts = False}
-            (univPreds proof env ++ sizePreds proof ++ newepochConstraints proof)
+            (univPreds proof keys ++ sizePreds proof ++ newepochConstraints proof)
             (newEpochStateT proof)
   -- Fix up issues with PParams generator
   let pp = applyPPUpdates
@@ -214,7 +228,7 @@ genNewEpochState proof env = do
       fixPoolStakeVrfs (PoolDistr pd) = PoolDistr $ Map.mapWithKey fixPoolStakeVrf pd
       fixPoolStakeVrf kh stake = stake{ individualPoolStakeVrf = hashVerKeyVRF vrfk }
         where
-          vrfk = case find ((== kh) . aikColdKeyHash) (ksStakePools $ keysUniv env) of
+          vrfk = case find ((== kh) . aikColdKeyHash) (ksStakePools keys) of
                    Just issuerKeys -> vrfVerKey $ aikVrf issuerKeys
                    Nothing -> error $ "Bad stake pool hash " ++ show kh
 
@@ -231,6 +245,48 @@ shrinkNewEpochState proof st =
     (newEpochStateT proof)
     st
 
+forAllChainTraceFromArbitraryEpochState ::
+  forall era prop.
+  ( Testable prop
+  , EraGen era
+  , HasTrace (CHAIN era) (GenEnv era)
+  -- , EraGovernance era
+    -- TODO: relax these
+  , AlonzoEraPParams era
+  , ExactEra AlonzoEra era
+  , Reflect era
+  ) =>
+  Proof era ->
+  Word64 -> -- trace length
+  Constants ->
+  SlotNo -> -- start from this slot
+  (Trace (CHAIN era) -> prop) ->
+  Property
+forAllChainTraceFromArbitraryEpochState proof n constants slot prop =
+  forAllBlind (genNewEpochState proof $ geKeySpace env) $ \ nes ->
+    forAllTraceFromInitState
+      testGlobals
+      n
+      env
+      (Just $ \ _ -> pure $ Right $ newChainState nes slot)
+      prop
+  where
+    p :: Proxy era
+    p = Proxy
+    env = genEnv p constants
+
+newChainState :: Reflect era => NewEpochState era -> SlotNo -> ChainState era
+newChainState nes slot =
+  -- TODO: more sense
+  ChainState { chainNes              = nes
+             , chainOCertIssue       = mempty
+             , chainEpochNonce       = NeutralNonce
+             , chainEvolvingNonce    = NeutralNonce
+             , chainCandidateNonce   = NeutralNonce
+             , chainPrevEpochNonce   = NeutralNonce
+             , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot (HashHeader def)
+             }
+
 -- Property ---------------------------------------------------------------
 
 type TestEra = AlonzoEra TestCrypto
@@ -241,10 +297,44 @@ instance Embed (AlonzoBBODY TestEra) (CHAIN TestEra) where
   wrapFailed = BbodyFailure
   wrapEvent = BbodyEvent
 
+-- Copied from Test.Cardano.Ledger.Shelley.Generator.Trace that we can't import here.
+instance
+  ( EraGen era
+  , EraSegWits era
+  , Mock (EraCrypto era)
+  , ApplyBlock era
+  , GetLedgerView era
+  , MinLEDGER_STS era
+  , MinCHAIN_STS era
+  , Embed (EraRule "BBODY" era) (CHAIN era)
+  , Environment (EraRule "BBODY" era) ~ BbodyEnv era
+  , State (EraRule "BBODY" era) ~ ShelleyBbodyState era
+  , Signal (EraRule "BBODY" era) ~ Block (BHeaderView (EraCrypto era)) era
+  , Embed (EraRule "TICKN" era) (CHAIN era)
+  , Environment (EraRule "TICKN" era) ~ TicknEnv
+  , State (EraRule "TICKN" era) ~ TicknState
+  , Signal (EraRule "TICKN" era) ~ Bool
+  , Embed (EraRule "TICK" era) (CHAIN era)
+  , Environment (EraRule "TICK" era) ~ ()
+  , State (EraRule "TICK" era) ~ NewEpochState era
+  , Signal (EraRule "TICK" era) ~ SlotNo
+  , HasTrace (EraRule "LEDGERS" era) (GenEnv era)
+  ) =>
+  HasTrace (CHAIN era) (GenEnv era)
+  where
+  envGen _ = pure ()
+
+  sigGen ge _env st = genBlock ge st
+
+  shrinkSignal = (\_x -> []) -- shrinkBlock -- TO DO FIX ME
+
+  type BaseEnv (CHAIN era) = Globals
+  interpretSTS globals act = runIdentity $ runReaderT act globals
+
 testProof :: Proof TestEra
 testProof = Alonzo Mock
 
-prop_newEpochState :: EpochStateUniv TestEra -> Property
+prop_newEpochState :: KeySpace TestEra -> Property
 prop_newEpochState env =
   forAllShrinkBlind (genNewEpochState testProof env) (shrinkNewEpochState testProof) $ \ st ->
   validEpochState st .&&. conjoin (map validEpochState $ shrinkNewEpochState testProof st)
@@ -255,77 +345,40 @@ validEpochState st = checkPredicates preds (saturateEnv env preds)
     env   = unTarget NewEpochStateR (newEpochStateT testProof) st
     preds = newepochConstraints testProof
 
--- testTxValidForLEDGER
--- Test.Cardano.Ledger.Shelley.Generator.genBlock
-
 testGenerateTx :: IO ()
-testGenerateTx = do -- quickCheck prop_generateTx
-  env0 <- generate arbitrary
+testGenerateTx = do
   let genv = genEnv undefined defaultConstants
       keyspace = geKeySpace genv
-      env = env0 { keysUniv = keyspace }
-  nes <- generate $ genNewEpochState testProof env
+  nes <- generate $ genNewEpochState testProof keyspace
   putStrLn "--- UTxO set ---"
   print $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
   putStrLn "--- PParams ---"
   print $ nes ^. nesEsL . esPpL
   let slot :: SlotNo
       slot = 3551
-      hh = HashHeader def
-      st :: ChainState TestEra
-      st = ChainState { chainNes              = nes
-                      , chainOCertIssue       = mempty
-                      , chainEpochNonce       = NeutralNonce
-                      , chainEvolvingNonce    = NeutralNonce
-                      , chainCandidateNonce   = NeutralNonce
-                      , chainPrevEpochNonce   = NeutralNonce
-                      , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
-                      }
-  print hh
+      st = newChainState nes slot
   -- trace "next test case ---------->" $
   block@(Block bh@(BHeader bhb _) _) <- generate $ genBlock genv st
   putStrLn "--- Block ---"
   print bh
-  let slotNo = bheaderSlotNo bhb
-      st' = tickChainState slotNo st
+  let slot' = bheaderSlotNo bhb
+      st' = tickChainState slot' st
   case runShelleyBase $ applySTS @(CHAIN TestEra) $ TRC ((), st', block) of
     Left err -> putStrLn $ "--- Error ---\n" ++ show err
     Right _st' -> putStrLn "Success!"
 
-prop_generateTx :: EpochStateUniv TestEra -> Property
-prop_generateTx env0 =
-  forAllBlind (genNewEpochState testProof env) $ \ nes ->
-    -- counterexample "--- NewEpochState ---" $
-    -- counterexample (show $ prettyA $ nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL) $
-    counterexample "--- PParams ---" $
-    counterexample (show $ nes ^. nesEsL . esPpL) $
-    counterexample "--- Stake pools ---" $
-    counterexample (show $ nes ^. nesPdL) $
-    let slot :: SlotNo
-        slot = 3551
-        hh = HashHeader def
-        st :: ChainState TestEra
-        st = ChainState { chainNes              = nes
-                        , chainOCertIssue       = mempty
-                        , chainEpochNonce       = NeutralNonce -- mkNonceFromNumber 2
-                        , chainEvolvingNonce    = NeutralNonce -- mkNonceFromNumber 3
-                        , chainCandidateNonce   = NeutralNonce -- mkNonceFromNumber 4
-                        , chainPrevEpochNonce   = NeutralNonce -- mkNonceFromNumber 5
-                        , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
-                        }
-    in
-    forAllBlind (genBlock genv st) $ \ block@(Block (BHeader bhb _) _) ->
-    counterexample "--- Block ---" $
-    counterexample (show $ prettyA block) $
-    let slotNo = bheaderSlotNo bhb
-        st' = tickChainState slotNo st
-    in case runShelleyBase $ applySTS @(CHAIN TestEra) $ TRC ((), st', block) of
-      Left err -> counterexample ("--- Error ---\n" ++ show err) False
-      Right st'' ->
-        counterexample ("--- Before applying block ---\n" ++ showEnv (unTarget NewEpochStateR (newEpochStateT testProof) nes)) $
-        validEpochState (chainNes st'')
-  where
-    genv = genEnv undefined defaultConstants
-    keyspace = geKeySpace genv
-    env = env0 { keysUniv = keyspace }
+prop_generateTx :: Property
+prop_generateTx =
+  forAll (choose (1000, 4000)) $ \ slot ->
+  forAllChainTraceFromArbitraryEpochState testProof 10 defaultConstants (SlotNo slot) $ \ tr -> do
+  let ssts = sourceSignalTargets tr
+
+  conjoin . concat $
+    [ map checkLedgerConstraints $ zip ssts [1..]
+    ]
+
+checkLedgerConstraints :: (SourceSignalTarget (CHAIN TestEra), Int) -> Property
+checkLedgerConstraints (SourceSignalTarget _ targetSt _, count) =
+  counterexample ("Failed on step " ++ show count) $
+  validEpochState (chainNes targetSt)
 
