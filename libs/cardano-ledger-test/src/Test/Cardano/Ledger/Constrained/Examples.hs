@@ -657,9 +657,13 @@ dstatePreds _p =
   , SumsTo (DeltaCoin 1) (Delta instanReservesSum) LTH [One (Delta reserves), One deltaReserves]
   , SumsTo (Coin 1) instanTreasurySum EQL [SumMap instanTreasury]
   , SumsTo (DeltaCoin 1) (Delta instanTreasurySum) LTH [One (Delta treasury), One deltaTreasury]
-  , ProjS fGenDelegGenKeyHashL GenHashR (Dom futureGenDelegs) :=: Dom genDelegs
+  , futureGenKeyHashes :⊆: Dom genDelegs
+  , ProjS fGenDelegGenKeyHashL GenHashR (Dom futureGenDelegs) :=: futureGenKeyHashes
   ]
   where
+    -- Local variable since the solver can't solve ProjS l (Dom X) :⊆: Y
+    futureGenKeyHashes = Var (V "futureGenKeyHashes" (SetR GenHashR) No)
+
     instanReservesSum = Var (V "instanReservesSum" CoinR No)
     instanTreasurySum = Var (V "instanTreasurySum" CoinR No)
 
