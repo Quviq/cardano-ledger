@@ -18,12 +18,9 @@ import Cardano.Ledger.Address
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
-import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Ledger.Keys (GenDelegPair, hashKey)
 import Cardano.Ledger.CertState (FutureGenDeleg (..))
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
--- import Cardano.Ledger.Era (Era (EraCrypto))
--- import Cardano.Ledger.Shelley.Rewards (Reward (..))
 import Control.Exception (ErrorCall (..))
 import Control.Monad (when)
 import qualified Data.List as List
@@ -48,7 +45,6 @@ import Test.Cardano.Ledger.Constrained.Vars
 import Test.Cardano.Ledger.Generic.PrettyCore (PrettyC (..))
 import Test.Cardano.Ledger.Generic.Proof (Reflect (..), Standard, ShelleyEra)
 import Test.Cardano.Ledger.Shelley.Generator.Core
-import Test.Cardano.Ledger.Shelley.Generator.EraGen
 import Test.Cardano.Ledger.Alonzo.AlonzoEraGen ()
 import Test.Cardano.Ledger.Shelley.Generator.Presets (keySpace)
 import Test.Cardano.Ledger.Shelley.Constants (defaultConstants)
@@ -560,22 +556,8 @@ test16 =
 
 -- ==============================================
 
-data EpochStateUniv era = EpochStateUniv
-  { txinUniv :: Set (TxIn (EraCrypto era))
-  , keysUniv :: KeySpace era
-  }
-
-instance Show (EpochStateUniv era) where
-  show _ = "EpochStateUniv{..}"
-
-instance EraGen era => Arbitrary (EpochStateUniv era) where
-  arbitrary =
-    EpochStateUniv
-      <$> (Set.fromList <$> vectorOf 15 arbitrary)
-      <*> pure (keySpace defaultConstants)
-
-univPreds :: forall era. EraTxOut era => Proof era -> EpochStateUniv era -> [Pred era]
-univPreds p EpochStateUniv{..} =
+univPreds :: forall era. EraTxOut era => Proof era -> KeySpace era -> [Pred era]
+univPreds p keyspace =
   [ Dom poolDistr :⊆: poolsUnivTm
   , Dom regPools :⊆: poolsUnivTm
   , Dom retiring :⊆: poolsUnivTm
@@ -601,18 +583,16 @@ univPreds p EpochStateUniv{..} =
   , Dom (proposalsT p) :⊆: genesisUnivTm
   , Dom (futureProposalsT p) :⊆: genesisUnivTm
   , Dom genDelegs :⊆: genesisUnivTm
-  , Dom (utxo p) :⊆: txinUnivTm
   , Rng (ProjM (txOutL . addrTxOutL @era) AddrR (utxo p)) :⊆: addrUnivTm
   ]
   where
     -- TODO: script hashes
-    credsUnivTm = Lit (SetR CredR) $ Set.fromList [ mkCred stakeKey | (_, stakeKey) <- ksKeyPairs keysUniv ]
-    poolsUnivTm = Lit (SetR PoolHashR) $ Set.fromList [ aikColdKeyHash keys | keys <- ksStakePools keysUniv ]
-    genesisUnivTm = Lit (SetR GenHashR) $ Set.fromList [ hashKey $ vKey key | (key, _) <- ksCoreNodes keysUniv ]
-    txinUnivTm = Lit (SetR TxInR) txinUniv
+    credsUnivTm = Lit (SetR CredR) $ Set.fromList [ mkCred stakeKey | (_, stakeKey) <- ksKeyPairs keyspace ]
+    poolsUnivTm = Lit (SetR PoolHashR) $ Set.fromList [ aikColdKeyHash keys | keys <- ksStakePools keyspace ]
+    genesisUnivTm = Lit (SetR GenHashR) $ Set.fromList [ hashKey $ vKey key | (key, _) <- ksCoreNodes keyspace ]
     addrUnivTm :: Term era (Set (Addr (EraCrypto era)))
     addrUnivTm = Lit (SetR AddrR) $ Set.fromList [ Addr Testnet (mkCred payKey) (StakeRefBase $ mkCred stakeKey)
-                                                 | (payKey, stakeKey) <- ksKeyPairs keysUniv ]
+                                                 | (payKey, stakeKey) <- ksKeyPairs keyspace ]
                                          -- and scripts
 
 -- These constraints control generation but are not requirements on valid ledger states.
@@ -714,7 +694,7 @@ newepochstatePreds _proof =
   , SumsTo (1 % 1000) (Lit RationalR 1) EQL [Project RationalR poolDistr]
   ]
 
-newepochConstraints :: Reflect era => Proof era -> EpochStateUniv era -> [Pred era]
+newepochConstraints :: Reflect era => Proof era -> KeySpace era -> [Pred era]
 newepochConstraints pr env =
   univPreds pr env
     ++ sizePreds pr
@@ -726,14 +706,13 @@ newepochConstraints pr env =
     ++ newepochstatePreds pr
 
 test17 :: Gen Property
-test17 = do
-  env <- arbitrary
+test17 =
   testn
     proof
     "Test 17. Full NewEpochState"
     False
     (stoi {sumBeforeParts = False})
-    (newepochConstraints proof env)
+    (newepochConstraints proof $ keySpace defaultConstants)
     (Assemble (newEpochStateT proof))
   where
     proof = Alonzo Standard
