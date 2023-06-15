@@ -34,7 +34,7 @@ import Test.Cardano.Ledger.Constrained.Monad
 import Test.Cardano.Ledger.Constrained.Size
 import Test.Cardano.Ledger.Constrained.Rewrite
 import Test.Cardano.Ledger.Constrained.Lenses
-import Test.Cardano.Ledger.Constrained.Tests (checkPredicates)
+import Test.Cardano.Ledger.Constrained.Tests (checkPredicates, showEnv)
 
 import Test.Cardano.Ledger.Constrained.Shrink
 
@@ -314,14 +314,16 @@ prop_generateTx env0 =
                         , chainLastAppliedBlock = At $ LastAppliedBlock 100 slot hh
                         }
     in
-    forAllBlind (genBlock genv st) $ \ block@(Block bh@(BHeader bhb _) _) ->
+    forAllBlind (genBlock genv st) $ \ block@(Block (BHeader bhb _) _) ->
     counterexample "--- Block ---" $
-    counterexample (show bh) $
+    counterexample (show $ prettyA block) $
     let slotNo = bheaderSlotNo bhb
         st' = tickChainState slotNo st
     in case runShelleyBase $ applySTS @(CHAIN TestEra) $ TRC ((), st', block) of
       Left err -> counterexample ("--- Error ---\n" ++ show err) False
-      Right st'' -> validEpochState (chainNes st'')
+      Right st'' ->
+        counterexample ("--- Before applying block ---\n" ++ showEnv (unTarget NewEpochStateR (newEpochStateT testProof) nes)) $
+        validEpochState (chainNes st'')
   where
     genv = genEnv undefined defaultConstants
     keyspace = geKeySpace genv
