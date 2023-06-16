@@ -11,7 +11,6 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Test.Cardano.Ledger.Constrained.LedgerTests where
 
-import Control.Monad.Reader (runReaderT)
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import Data.List (find)
@@ -30,9 +29,7 @@ import Test.Cardano.Ledger.Constrained.Env
 import Data.Default.Class (Default (def))
 import Test.Cardano.Ledger.Generic.Updaters
 import Cardano.Slotting.Slot
-import Cardano.Protocol.TPraos.API
 import Cardano.Protocol.TPraos.BHeader
-import Cardano.Protocol.TPraos.Rules.Tickn
 
 -- import Cardano.Ledger.Coin
 -- import Cardano.Ledger.Shelley
@@ -58,7 +55,6 @@ import Test.Cardano.Ledger.Alonzo.EraMapping ()
 
 -- import Test.Cardano.Ledger.Shelley.Utils (testGlobals)
 -- import Cardano.Ledger.Shelley.API.Mempool (applyTxs, ApplyTxError(..))
-import Cardano.Ledger.BHeaderView
 import Cardano.Ledger.Alonzo.Scripts (Prices(..))
 import Cardano.Ledger.Alonzo.Core
 import Cardano.Ledger.Alonzo.PParams
@@ -69,9 +65,7 @@ import Cardano.Ledger.Coin
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.PoolDistr
 import Cardano.Ledger.Keys
-import Cardano.Ledger.Shelley.Rules
 import Cardano.Ledger.Shelley.API hiding (stake)
-import Test.Cardano.Ledger.Shelley.ConcreteCryptoTypes (Mock)
 import Test.Cardano.Ledger.Shelley.Rules.Chain
 import Test.Cardano.Ledger.Shelley.Generator.Block
 import Test.Cardano.Ledger.Shelley.Generator.Core
@@ -79,6 +73,7 @@ import Test.Cardano.Ledger.Shelley.Generator.Presets
 import Test.Cardano.Ledger.Shelley.Generator.EraGen
 import Test.Cardano.Ledger.Shelley.Constants
 import Test.Cardano.Ledger.Shelley.Utils
+import Test.Cardano.Ledger.Shelley.Rules.AdaPreservation
 
 import Test.QuickCheck hiding (getSize, total)
 
@@ -297,40 +292,6 @@ instance Embed (AlonzoBBODY TestEra) (CHAIN TestEra) where
   wrapFailed = BbodyFailure
   wrapEvent = BbodyEvent
 
--- Copied from Test.Cardano.Ledger.Shelley.Generator.Trace that we can't import here.
-instance
-  ( EraGen era
-  , EraSegWits era
-  , Mock (EraCrypto era)
-  , ApplyBlock era
-  , GetLedgerView era
-  , MinLEDGER_STS era
-  , MinCHAIN_STS era
-  , Embed (EraRule "BBODY" era) (CHAIN era)
-  , Environment (EraRule "BBODY" era) ~ BbodyEnv era
-  , State (EraRule "BBODY" era) ~ ShelleyBbodyState era
-  , Signal (EraRule "BBODY" era) ~ Block (BHeaderView (EraCrypto era)) era
-  , Embed (EraRule "TICKN" era) (CHAIN era)
-  , Environment (EraRule "TICKN" era) ~ TicknEnv
-  , State (EraRule "TICKN" era) ~ TicknState
-  , Signal (EraRule "TICKN" era) ~ Bool
-  , Embed (EraRule "TICK" era) (CHAIN era)
-  , Environment (EraRule "TICK" era) ~ ()
-  , State (EraRule "TICK" era) ~ NewEpochState era
-  , Signal (EraRule "TICK" era) ~ SlotNo
-  , HasTrace (EraRule "LEDGERS" era) (GenEnv era)
-  ) =>
-  HasTrace (CHAIN era) (GenEnv era)
-  where
-  envGen _ = pure ()
-
-  sigGen ge _env st = genBlock ge st
-
-  shrinkSignal = (\_x -> []) -- shrinkBlock -- TO DO FIX ME
-
-  type BaseEnv (CHAIN era) = Globals
-  interpretSTS globals act = runIdentity $ runReaderT act globals
-
 testProof :: Proof TestEra
 testProof = Alonzo Mock
 
@@ -382,3 +343,11 @@ checkLedgerConstraints (SourceSignalTarget _ targetSt _, count) =
   counterexample ("Failed on step " ++ show count) $
   validEpochState (chainNes targetSt)
 
+prop_adaPreservation :: Property
+prop_adaPreservation =
+  forAll (choose (1000, 4000)) $ \ slot ->
+  forAllChainTraceFromArbitraryEpochState testProof 10 defaultConstants (SlotNo slot)
+    (adaPreservationTraceProps @TestEra @(AlonzoLEDGER TestEra))
+
+prop_adaPreservation' :: Property
+prop_adaPreservation' = adaPreservationProps @TestEra @(AlonzoLEDGER TestEra)
