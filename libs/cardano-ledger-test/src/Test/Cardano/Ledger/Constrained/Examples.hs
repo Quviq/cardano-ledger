@@ -582,7 +582,7 @@ univPreds p keyspace =
   , Dom instanTreasury :⊆: credsUnivTm
   , Dom (proposalsT p) :⊆: genesisUnivTm
   , Dom (futureProposalsT p) :⊆: genesisUnivTm
-  , Dom genDelegs :⊆: genesisUnivTm
+  , Dom genDelegs :=: genesisUnivTm
   , Rng (ProjM (txOutL . addrTxOutL @era) AddrR (utxo p)) :⊆: addrUnivTm
   ]
   where
@@ -602,7 +602,7 @@ sizePreds proof =
   , Sized (Range 5 6) (Dom retiring) -- we need       retiring :⊆: regPools        :⊆: poolsUinv
   , Sized (AtLeast 9) (Dom regPools) -- AND we need                 futureRegPools  :⊆: poolsUniv
   , Sized (AtMost 8) rewards -- Small enough that its leaves some slack with credUniv
-  , Sized (AtLeast 10) (utxo proof)
+  , Sized (AtLeast 100) (utxo proof)
   , Sized (ExactSize 8) (Dom prevBlocksMade) -- Both prevBlocksMade and prevBlocksMadeDom will have size 8
   , Sized (ExactSize 8) (Dom currBlocksMade)
   , Disjoint (Dom futureRegPools) (Dom retiring)
