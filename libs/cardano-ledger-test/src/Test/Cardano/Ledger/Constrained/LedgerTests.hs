@@ -74,6 +74,7 @@ import Test.Cardano.Ledger.Shelley.Generator.EraGen
 import Test.Cardano.Ledger.Shelley.Constants
 import Test.Cardano.Ledger.Shelley.Utils
 import Test.Cardano.Ledger.Shelley.Rules.AdaPreservation
+import Test.Cardano.Ledger.Shelley.Rules.TestChain
 
 import Test.QuickCheck hiding (getSize, total)
 
@@ -332,6 +333,15 @@ prop_generateTx :: Property
 prop_generateTx =
   forAll (choose (1000, 4000)) $ \ slot ->
   forAllChainTraceFromArbitraryEpochState testProof 10 defaultConstants (SlotNo slot) $ \ tr -> do
+  let ssts = sourceSignalTargets tr
+
+  conjoin . concat $
+    [ map checkLedgerConstraints $ zip ssts [1..]
+    ]
+
+prop_generateTxGenesis :: Property
+prop_generateTxGenesis =
+  forAllChainTrace 10 defaultConstants $ \ tr -> do
   let ssts = sourceSignalTargets tr
 
   conjoin . concat $
