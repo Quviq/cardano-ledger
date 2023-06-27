@@ -346,7 +346,7 @@ checkLedgerConstraints (SourceSignalTarget _ targetSt _, count) =
 prop_adaPreservation :: Property
 prop_adaPreservation =
   forAll (choose (1000, 4000)) $ \ slot ->
-  forAllChainTraceFromArbitraryEpochState testProof 10 defaultConstants (SlotNo slot)
+  forAllChainTraceFromArbitraryEpochState testProof 100 defaultConstants (SlotNo slot)
     (adaPreservationTraceProps @TestEra @(AlonzoLEDGER TestEra))
 
 prop_adaPreservation' :: Property
