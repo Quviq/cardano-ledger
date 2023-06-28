@@ -204,7 +204,7 @@ genNewEpochState proof keys = do
   nes <- genFromConstraints
             proof
             standardOrderInfo {sumBeforeParts = False}
-            (univPreds proof keys ++ sizePreds proof ++ newepochConstraints proof)
+            (univPreds proof keys ++ sizePreds proof ++ generationPreds proof ++ newepochConstraints proof)
             (newEpochStateT proof)
   -- Fix up issues with PParams generator
   let pp = applyPPUpdates

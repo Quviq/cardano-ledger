@@ -605,6 +605,16 @@ sizePreds proof =
   , Sized (AtLeast 100) (utxo proof)
   , Sized (ExactSize 8) (Dom prevBlocksMade) -- Both prevBlocksMade and prevBlocksMadeDom will have size 8
   , Sized (ExactSize 8) (Dom currBlocksMade)
+  , Sized (AtLeast 1) instanReserves
+  ]
+
+-- These constraints control generation but are not requirements on valid ledger states.
+generationPreds :: Proof era -> [Pred era]
+generationPreds proof =
+  [ -- Shelley/Alonzo protocol params
+    maxTxSize proof :=: Lit NaturalR 16384
+  , maxBHSize proof :=: Lit NaturalR 1100
+  , maxBBSize proof :=: Lit NaturalR 65536
   , Disjoint (Dom futureRegPools) (Dom retiring)
   ]
 
@@ -631,7 +641,6 @@ dstatePreds _p =
 
     Sized (AtLeast 1) treasury
   , Random instanTreasury
-  , Sized (AtLeast 1) instanReserves
   , Negate (deltaReserves) :=: deltaTreasury
   , SumsTo (Coin 1) instanReservesSum EQL [SumMap instanReserves]
   , SumsTo (DeltaCoin 1) (Delta instanReservesSum) LTH [One (Delta reserves), One deltaReserves]
@@ -675,10 +684,9 @@ epochstatePreds proof =
   , Random (prevpparams proof)
   , Random (pparams proof)
   , Sized (AtLeast 1) (maxBHSize proof)
-    -- Shelley/Alonzo protocol params
-  , maxTxSize proof :=: Lit NaturalR 16384
-  , maxBHSize proof :=: Lit NaturalR 1100
-  , maxBBSize proof :=: Lit NaturalR 65536
+  , Random (maxTxSize proof)
+  , Random (maxBHSize proof)
+  , Random (maxBBSize proof)
   , -- , Random (maxBBSize proof) -- This will cause underflow on Natural
     SumsTo (1 % 1000) (Lit RationalR 1) EQL [Project RationalR markPoolDistr]
   , Component
