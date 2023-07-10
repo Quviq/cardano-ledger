@@ -197,6 +197,8 @@ repTypeable r = case r of
   RewardR{} -> IsTypeable
   SlotNoR{} -> IsTypeable
   SizeR{} -> IsTypeable
+  CommColdHashR{} -> IsTypeable
+  CommHotHashR{} -> IsTypeable
   (repTypeable -> IsTypeable) :-> (repTypeable -> IsTypeable) -> IsTypeable
   MapR (repTypeable -> IsTypeable) (repTypeable -> IsTypeable) -> IsTypeable
   SetR (repTypeable -> IsTypeable) -> IsTypeable
@@ -517,6 +519,8 @@ shrinkRep SlotNoR t = shrink t
 shrinkRep SizeR _ = []
 shrinkRep VCredR t = shrink t
 shrinkRep VHashR t = shrink t
+shrinkRep CommColdHashR t = shrink t
+shrinkRep CommHotHashR t = shrink t
 
 -- ===========================
 
