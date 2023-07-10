@@ -143,6 +143,7 @@ adaPreservationTraceProps ::
   , TestingLedger era ledger
   , ChainProperty era
   , GovernanceState era ~ ShelleyPPUPState era
+  , ProtVerAtMost era 8
   ) =>
   Trace (CHAIN era) ->
   Property
