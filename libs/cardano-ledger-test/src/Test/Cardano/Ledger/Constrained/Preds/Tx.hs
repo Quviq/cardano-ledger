@@ -544,9 +544,7 @@ txBodyPreds p =
             (Constr "null" Set.null ^$ rdmrPtrs)
             (Before (maxTxExUnits p) redeemers)
             (SumsTo (Left (ExUnits 1 1)) (maxTxExUnits p) GTE [ProjMap ExUnitsR sndL redeemers])
-        , -- Unfortunately SumsTo at ExUnits does not work except at EQL OrdCond.
-          -- the problem is that (toI x + toI y) /= toI(x + y)
-          plutusDataHashes
+        , plutusDataHashes
             :<-: ( Constr "plutusDataHashes" getPlutusDataHashes
                     ^$ utxo p
                     ^$ tempTxBody

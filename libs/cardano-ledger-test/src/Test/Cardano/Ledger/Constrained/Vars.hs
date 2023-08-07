@@ -19,7 +19,7 @@ import Cardano.Ledger.Alonzo.UTxO (AlonzoScriptsNeeded (..))
 import Cardano.Ledger.AuxiliaryData (AuxiliaryDataHash)
 import Cardano.Ledger.BaseTypes (BlocksMade (..), EpochNo, Network (..), ProtVer (..), SlotNo (..), StrictMaybe (..))
 import qualified Cardano.Ledger.BaseTypes as Base (Globals (..))
-import Cardano.Ledger.CertState (CommitteeState, csCommitteeCredsL)
+import Cardano.Ledger.CertState (CommitteeState (..), csCommitteeCredsL)
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin)
 import Cardano.Ledger.Core (
   EraPParams,
@@ -77,7 +77,7 @@ import Numeric.Natural (Natural)
 import Test.Cardano.Ledger.Babbage.Serialisation.Generators ()
 import Test.Cardano.Ledger.Constrained.Ast (
   Target (..),
-  Term (Lit, Proj, Var),
+  Term (Lit, Var),
   constTarget,
   fieldToTerm,
   ppTarget,
@@ -273,14 +273,13 @@ dreps = Var $ V "dreps" (MapR VCredR DRepStateR) (Yes NewEpochStateR drepsL)
 drepsL :: NELens era (Map (Credential 'DRepRole (EraCrypto era)) (DRepState (EraCrypto era)))
 drepsL = nesEsL . esLStateL . lsCertStateL . certVStateL . vsDRepsL
 
-committeeState :: Term era (CommitteeState era)
-committeeState = Var $ V "committeState" CommitteeStateR (Yes NewEpochStateR committeeStateL)
+committeeState :: Term era (Map (Credential 'ColdCommitteeRole (EraCrypto era)) (Maybe (Credential 'HotCommitteeRole (EraCrypto era))))
+committeeState = Var $ V "committeeState" (MapR CommColdCredR (MaybeR CommHotCredR)) (Yes NewEpochStateR committeeStateL)
 
-committeeStateL :: NELens era (CommitteeState era)
-committeeStateL = nesEsL . esLStateL . lsCertStateL . certVStateL . vsCommitteeStateL
+committeeStateL :: NELens era (Map (Credential 'ColdCommitteeRole (EraCrypto era)) (Maybe (Credential 'HotCommitteeRole (EraCrypto era))))
+committeeStateL = nesEsL . esLStateL . lsCertStateL . certVStateL . vsCommitteeStateL . csCommitteeCredsL
 
-ccHotKeys :: Term era (Map (Credential 'ColdCommitteeRole (EraCrypto era)) (Maybe (Credential 'HotCommitteeRole (EraCrypto era))))
-ccHotKeys = Proj csCommitteeCredsL (MapR CommColdCredR (MaybeR CommHotCredR)) committeeState
+-- (lens csCommitteeCreds (\ _ y -> CommitteeState y))
 
 -- UTxOState
 
@@ -305,8 +304,8 @@ fees = Var $ V "fees" CoinR (Yes NewEpochStateR feesL)
 feesL :: NELens era Coin
 feesL = nesEsL . esLStateL . lsUTxOStateL . utxosFeesL
 
-donationT :: Term era Coin
-donationT = Var $ V "donation" CoinR (Yes NewEpochStateR donationL)
+donation :: Term era Coin
+donation = Var $ V "donation" CoinR (Yes NewEpochStateR donationL)
 
 donationL :: NELens era Coin
 donationL = nesEsL . esLStateL . lsUTxOStateL . utxosDonationL
@@ -331,19 +330,19 @@ futureProposalsT ::
   Proof era -> Term era (Map (KeyHash 'Genesis (EraCrypto era)) (PParamsUpdateF era))
 futureProposalsT p = Var (V "futureProposals" (MapR GenHashR (PParamsUpdateR p)) No)
 
-curPParamsT :: Proof era -> Term era (PParamsF era)
-curPParamsT p = Var (V "curPParams" (PParamsR p) No)
+currPParams :: Proof era -> Term era (PParamsF era)
+currPParams p = Var (V "currPParams" (PParamsR p) No)
 
-prevPParamsT :: Proof era -> Term era (PParamsF era)
-prevPParamsT p = Var (V "prevPParams" (PParamsR p) No)
+prevPParams :: Gov.EraGov era => Proof era -> Term era (PParamsF era)
+prevPParams p = Var (V "prevPParams" (PParamsR p) (Yes NewEpochStateR (nesEsL . prevPParamsEpochStateL . ppFL p)))
 
-ppupStateT :: Proof era -> Target era (ShelleyGovState era)
+ppupStateT :: Gov.EraGov era => Proof era -> Target era (ShelleyGovState era)
 ppupStateT p =
   Constr "PPUPState" ppupfun
     ^$ proposalsT p
     ^$ futureProposalsT p
-    ^$ curPParamsT p
-    ^$ prevPParamsT p
+    ^$ currPParams p
+    ^$ prevPParams p
   where
     ppupfun x y (PParamsF _ pp) (PParamsF _ prev) =
       ShelleyGovState
@@ -414,9 +413,6 @@ snapshotsL = nesEsL . esSnapshotsL
 -- | Lens' from the Core PParams to the Model PParamsF which embeds a (Proof era)
 ppFL :: Proof era -> Lens' (PParams era) (PParamsF era)
 ppFL p = lens (\pp -> PParamsF p pp) (\_ (PParamsF _ qq) -> qq)
-
-prevpparams :: Gov.EraGov era => Proof era -> Term era (PParamsF era)
-prevpparams p = Var (V "prevpparams" (PParamsR p) (Yes NewEpochStateR (nesEsL . prevPParamsEpochStateL . ppFL p)))
 
 pparams :: Gov.EraGov era => Proof era -> Term era (PParamsF era)
 pparams p = Var (V "pparams" (PParamsR p) (Yes NewEpochStateR (nesEsL . curPParamsEpochStateL . ppFL p)))
@@ -846,7 +842,7 @@ utxoStateT p =
     ^$ deposits
     ^$ fees
     :$ govStateT p
-    ^$ donationT
+    ^$ donation
   where
     utxofun ::
       Proof era ->
@@ -870,7 +866,9 @@ certstateT = Constr "CertState" CertState :$ vstateT :$ pstateT :$ dstateT
 
 -- | Target for VState
 vstateT :: Target era (VState era)
-vstateT = Constr "VState" VState ^$ dreps :$ constTarget (DRComplete Map.empty) ^$ committeeState
+vstateT = Constr "VState" vStateF ^$ dreps :$ constTarget (DRComplete Map.empty) ^$ committeeState
+  where
+    vStateF x y z = VState x y (CommitteeState z)
 
 -- | Target for PState
 pstateT :: Target era (PState era)
@@ -913,6 +911,9 @@ instantaneousRewardsT =
 allvars :: String
 allvars = show (ppTarget (newEpochStateT (Shelley Standard)))
 
+printTarget :: Target era t -> IO ()
+printTarget t = putStrLn (show (ppTarget t))
+
 -- =====================================================================
 -- PParams fields
 
@@ -934,7 +935,7 @@ protVer proof =
         (Yes (PParamsR proof) $ withEraPParams proof (pparamsWrapperL . ppProtocolVersionL))
     )
 
--- | ProtVer in prevpparams
+-- | ProtVer in prevPParams
 prevProtVer :: Proof era -> Term era ProtVer
 prevProtVer proof =
   Var

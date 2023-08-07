@@ -41,7 +41,7 @@ import Test.Cardano.Ledger.Constrained.Classes (
 import Test.Cardano.Ledger.Constrained.Combinators (errorMess, genFromMap, itemFromSet, suchThatErr)
 import Test.Cardano.Ledger.Constrained.Env
 import Test.Cardano.Ledger.Constrained.Monad
-import Test.Cardano.Ledger.Constrained.Rewrite (DependGraph (..), OrderInfo, compileGen, cpeq)
+import Test.Cardano.Ledger.Constrained.Rewrite (DependGraph (..), OrderInfo, compileGenWithSubst, cpeq)
 import Test.Cardano.Ledger.Constrained.Size (
   Size (..),
   genFromIntRange,
@@ -939,13 +939,13 @@ solveOneVar subst0 (names, preds) = case (names, map (substPred subst0) preds) o
 
 toolChainSub :: Era era => Proof era -> OrderInfo -> [Pred era] -> Subst era -> Gen (Subst era)
 toolChainSub _proof order cs subst0 = do
-  (_count, DependGraph pairs) <- compileGen order (map (substPredWithVarTest subst0) cs)
+  (_count, DependGraph pairs) <- compileGenWithSubst order subst0 cs
   Subst subst <- foldlM' solveOneVar subst0 pairs
   let isTempV k = not (elem '.' k)
   pure $ (Subst (Map.filterWithKey (\k _ -> isTempV k) subst))
 
 toolChain :: Era era => Proof era -> OrderInfo -> [Pred era] -> Subst era -> Gen (Env era)
 toolChain _proof order cs subst0 = do
-  (_count, DependGraph pairs) <- compileGen order (map (substPredWithVarTest subst0) cs)
+  (_count, DependGraph pairs) <- compileGenWithSubst order subst0 cs
   subst <- foldlM' solveOneVar subst0 pairs
   monadTyped $ substToEnv subst emptyEnv

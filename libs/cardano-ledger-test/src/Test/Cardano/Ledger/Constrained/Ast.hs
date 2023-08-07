@@ -211,6 +211,7 @@ data Target era t where
   Simple :: Term era t -> Target era t
   (:$) :: Target era (a -> b) -> Target era a -> Target era b
   Constr :: String -> (a -> b) -> Target era (a -> b)
+  Invert :: Target era t -> (t -> Env era -> Env era) -> Target era t
 
 infixl 0 ^$
 
@@ -339,6 +340,7 @@ instance Show (Target era t) where
     where
       pp :: Univ.Any (Target era) -> String
       pp (Univ.Any spec) = show spec
+  show (Invert t _) = "(Invert " ++ show t ++ ")"
 
 -- | "Print a Target as nested applications"
 showT :: forall era t. Target era t -> String
@@ -348,6 +350,7 @@ showT (f :$ x) = "(" ++ showT f ++ " " ++ showL pp " " (args x) ++ ")"
   where
     pp :: Univ.Any (Target era) -> String
     pp (Univ.Any spec) = showT spec
+showT (Invert t _) = "(Invert " ++ showT t ++ ")"
 
 args :: Target era t -> [Univ.Any (Target era)]
 args (x :$ xs) = Univ.Any x : args xs
@@ -363,6 +366,7 @@ targetRecord :: Target era t -> [(Text, PDoc)] -> PDoc
 targetRecord (Constr n _) xs = ppRecord (pack n) xs
 targetRecord (ts :$ t) xs = targetRecord ts (targetPair t : xs)
 targetRecord (Simple e) [] = ppString (show e)
+targetRecord (Invert x _) xs = targetRecord x xs
 targetRecord other xs = ppRecord (nameOf other) xs
 
 nameOf :: Target era t -> Text
@@ -370,6 +374,7 @@ nameOf (Constr cs _) = pack (map toLower cs ++ "T")
 nameOf (Simple (Var (V n _ _))) = pack n
 nameOf (Simple term) = pack (show term)
 nameOf (x :$ _) = nameOf x
+nameOf (Invert x _) = nameOf x
 
 targetPair :: Target era t -> (Text, PDoc)
 targetPair (Simple (Var (V n rep _))) = (pack n, ppString (show rep))
@@ -405,6 +410,7 @@ varsOfTarget ans s = case s of
   (a :$ b) -> varsOfTarget (varsOfTarget ans a) b
   (Simple x) -> varsOfTerm ans x
   (Constr _ _) -> ans
+  (Invert x _) -> varsOfTarget ans x
 
 expandSum :: Sum era c -> [Int] -> [Sum era c]
 expandSum (One (Var (V n r a))) ns = map (\i -> One (Var (V (n ++ "." ++ show i) r a))) ns
@@ -665,6 +671,7 @@ substTarget :: Subst era -> Target era t -> Target era t
 substTarget sub (Simple e) = Simple (substTerm sub e)
 substTarget sub (a :$ b) = substTarget sub a :$ substTarget sub b
 substTarget _ (Constr n f) = Constr n f
+substTarget sub (Invert x f) = Invert (substTarget sub x) f
 
 -- ======================================================
 -- Symbolic evaluators
@@ -729,6 +736,7 @@ simplifySum (ProjMap _ l (Lit _ m)) = pure (List.foldl' (\ans x -> add ans (x ^.
 simplifySum x = failT ["Can't simplify Sum: " ++ show x ++ ", to a value."]
 
 simplifyTarget :: Target era t -> Typed t
+simplifyTarget (Invert x _) = simplifyTarget x
 simplifyTarget (Simple t) = simplify t
 simplifyTarget (Constr _ f) = pure f
 simplifyTarget (x :$ y) = do
@@ -775,6 +783,7 @@ runTerm env (Pair s m) =
     pure (sv, mv)
 
 runTarget :: Env era -> Target era t -> Typed t
+runTarget env (Invert t _) = runTarget env t
 runTarget env (Simple t) = runTerm env t
 runTarget _ (Constr _ f) = pure f
 runTarget env (x :$ y) = do

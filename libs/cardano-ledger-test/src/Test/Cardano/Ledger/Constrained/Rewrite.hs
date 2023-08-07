@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-unused-binds #-}
@@ -7,7 +8,7 @@ module Test.Cardano.Ledger.Constrained.Rewrite (
   rewrite,
   rewriteGen,
   compile,
-  compileGen,
+  compileGenWithSubst,
   removeSameVar,
   removeEqual,
   DependGraph (..),
@@ -17,6 +18,8 @@ module Test.Cardano.Ledger.Constrained.Rewrite (
   initialOrder,
   showGraph,
   listEq,
+  mkDependGraph,
+  notBefore,
   cpeq,
   cteq,
   mkNewVar,
@@ -41,7 +44,7 @@ import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Lens.Micro (Lens', lens, (&), (.~), (^.))
-import Test.Cardano.Ledger.Constrained.Ast hiding (Subst)
+import Test.Cardano.Ledger.Constrained.Ast
 import Test.Cardano.Ledger.Constrained.Combinators (setSized)
 import Test.Cardano.Ledger.Constrained.Env (Access (..), AnyF (..), Env (..), Field (..), Name (..), V (..), sameName)
 import Test.Cardano.Ledger.Constrained.Monad (HasConstraint (With), Typed (..), failT, monadTyped)
@@ -219,6 +222,7 @@ type SubItems era = [SubItem era]
 
 fresh :: (Int, SubItems era) -> Target era t -> (Int, SubItems era)
 fresh (n, sub) (Constr _ _) = (n, sub)
+fresh (n, sub) (Invert x _) = fresh (n, sub) x
 fresh (n, sub) (Simple (Var v@(V nm rep acc))) = (n + 1, SubItem v (Var (V (index nm n) rep acc)) : sub)
 fresh (n, sub) (Simple expr) = mksub n (Set.toList (varsOfTerm Set.empty expr))
   where
@@ -376,12 +380,13 @@ notBefore (Before _ _) = False
 notBefore _ = True
 
 -- | Construct the DependGraph
-compileGen :: OrderInfo -> [Pred era] -> Gen (Int, DependGraph era)
-compileGen info cs = do
+compileGenWithSubst :: OrderInfo -> Subst era -> [Pred era] -> Gen (Int, DependGraph era)
+compileGenWithSubst info subst0 cs = do
   (m, simple) <- rewriteGen (0, cs)
+  let instanSimple = fmap (substPredWithVarTest subst0) simple
   graph <- monadTyped $ do
-    orderedNames <- initialOrder info simple
-    mkDependGraph (length orderedNames) [] orderedNames [] (filter notBefore simple)
+    orderedNames <- initialOrder info instanSimple
+    mkDependGraph (length orderedNames) [] Set.empty orderedNames [] (filter notBefore instanSimple)
   pure (m, graph)
 
 -- ==============================================================
@@ -462,12 +467,13 @@ mkDependGraph ::
   forall era.
   Int ->
   [([Name era], [Pred era])] ->
+  Set (Name era) ->
   [Name era] ->
   [Name era] ->
   [Pred era] ->
   Typed (DependGraph era)
-mkDependGraph _ prev _ _ [] = pure (DependGraph (reverse prev))
-mkDependGraph count prev choices badchoices specs
+mkDependGraph _ prev _ _ _ [] = pure (DependGraph (reverse prev))
+mkDependGraph count prev _ choices badchoices specs
   | count <= 0 =
       failT
         [ "\nFailed to find an Ordering of variables to solve for.\nHandled Constraints\n"
@@ -479,13 +485,20 @@ mkDependGraph count prev choices badchoices specs
         , "\n  Still to be processed\n"
         , unlines (map show specs)
         ]
-mkDependGraph count prev [] badchoices cs = mkDependGraph (count - 1) prev (reverse badchoices) [] cs
-mkDependGraph count prev (n : more) badchoices cs =
+mkDependGraph count prev prevNames [] badchoices cs = mkDependGraph (count - 1) prev prevNames (reverse badchoices) [] cs
+mkDependGraph count prev prevNames (n : more) badchoices cs =
   case partitionE okE cs of
-    ([], _) -> mkDependGraph count prev more (n : badchoices) cs
+    ([], _) -> mkDependGraph count prev prevNames more (n : badchoices) cs
     (possible, notPossible) -> case splitMultiName n possible ([], Nothing, []) of
-      (ps, Nothing, []) -> mkDependGraph count (([n], ps) : prev) (reverse badchoices ++ more) [] notPossible
-      ([], Just (ns, p), []) -> mkDependGraph count ((ns, [p]) : prev) (reverse badchoices ++ more) [] notPossible
+      (ps, Nothing, []) -> mkDependGraph count (([n], ps) : prev) (Set.insert n prevNames) (reverse badchoices ++ more) [] notPossible
+      ([], Just (ns, p), []) ->
+        mkDependGraph
+          count
+          ((ns, [p]) : prev)
+          (Set.union (Set.fromList ns) prevNames)
+          (reverse badchoices ++ more)
+          []
+          notPossible
       (unary, binary, bad) ->
         error
           ( "SOMETHING IS WRONG in partionE \nunary = "
@@ -496,9 +509,7 @@ mkDependGraph count prev (n : more) badchoices cs =
               ++ unlines bad
           )
   where
-    prevNames = Set.fromList (concat (map fst prev))
-    defined = Set.insert n prevNames
-
+    !defined = Set.insert n prevNames
     (poss, notposs) = partitionE okE cs
     okE :: Pred era -> Either ([Name era], Pred era) (Pred era)
     okE p@(SumSplit _ t _ ns) =
@@ -636,7 +647,7 @@ compile :: OrderInfo -> [Pred era] -> Typed (DependGraph era)
 compile info cs = do
   let simple = rewrite cs
   orderedNames <- initialOrder info simple
-  mkDependGraph (length orderedNames) [] orderedNames [] (filter notBefore simple)
+  mkDependGraph (length orderedNames) [] Set.empty orderedNames [] (filter notBefore simple)
 
 showGraph :: (Vertex -> String) -> Graph -> String
 showGraph nameof g = unlines (map show (zip names (toList zs)))

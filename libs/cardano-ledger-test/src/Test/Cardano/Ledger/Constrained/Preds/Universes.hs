@@ -74,6 +74,27 @@ import Test.Cardano.Ledger.Shelley.Utils (epochFromSlotNo)
 import qualified Test.Cardano.Ledger.Shelley.Utils as Utils
 import Test.Tasty.QuickCheck
 
+-- ==========================================================
+
+numTxOuts, maxAssets, maxPolicyID, numPtr, numAddr, numKeys, numPools, numMultiAsset :: Int
+numTxOuts = 100
+maxAssets = 9 -- per Policy Id
+maxPolicyID = 2 -- per MultiAsset
+numMultiAsset = 10
+numPtr = 30
+numAddr = 200
+numKeys = 50
+numPools = 40
+numStakeKeys, numGenesisKeys, numVoteKeys, numTxIn, numCredentials, numDatums, numPreUtxo, numColUtxo :: Int
+numStakeKeys = 10 -- less than numKeys
+numGenesisKeys = 20 -- less than numKeys
+numVoteKeys = 40 -- less than numKeys
+numCredentials = 30
+numDatums = 30
+numTxIn = 120
+numPreUtxo = 100 -- must be smaller than numTxIn
+numColUtxo = 20 -- max size of the UTxo = numPreUtxo + numColUtxo
+
 -- ============================================================
 -- Coins
 
@@ -93,11 +114,12 @@ noZeroCoin :: Gen Coin
 noZeroCoin =
   Coin
     <$> frequency
-      [ (5, choose (1, 10))
-      , (10, choose (11, 100))
-      , (8, choose (101, 1000))
-      , (7, choose (1001, 10000))
-      , (2, choose (10001, 100000))
+      [ (1, choose (1, 10))
+      , (1, choose (11, 100))
+      , (1, choose (101, 10000))
+      , (1, choose (10001, 60000))
+      , (2, choose (60001, 200000))
+      , (4, choose (200001, 400000))
       ]
 
 -- ===============================================
@@ -156,18 +178,12 @@ genDatum datauniv =
     ]
 
 -- ==============
--- Values
-
-genValueF :: Proof era -> Coin -> Map (ScriptHash (EraCrypto era)) (ScriptF era) -> Gen (Value era)
-genValueF p (Coin c) scripts = case whichValue p of
-  ValueShelleyToAllegra -> pure (Coin c)
-  ValueMaryToConway -> MaryValue c <$> multiAsset scripts
-
--- ==============
 -- TxOuts
+-- ==============
 
 genTxOut ::
   Reflect era =>
+  (Coin -> Map (ScriptHash (EraCrypto era)) (ScriptF era) -> Gen (Value era)) ->
   Proof era ->
   Coin ->
   Set (Addr (EraCrypto era)) ->
@@ -175,13 +191,13 @@ genTxOut ::
   Map (ScriptHash (EraCrypto era)) (ScriptF era) ->
   Map (DataHash (EraCrypto era)) (Data era) ->
   Gen (TxOut era)
-genTxOut p c addruniv scriptuniv spendscriptuniv datauniv =
+genTxOut genvalue p c addruniv scriptuniv spendscriptuniv datauniv =
   case whichTxOut p of
     TxOutShelleyToMary ->
-      ShelleyTxOut <$> pick1 ["genTxOut ShelleyToMary Addr"] addruniv <*> genValueF p c scriptuniv
+      ShelleyTxOut <$> pick1 ["genTxOut ShelleyToMary Addr"] addruniv <*> genvalue c scriptuniv
     TxOutAlonzoToAlonzo -> do
       addr <- pick1 ["genTxOut AlonzoToAlonzo Addr"] addruniv
-      v <- genValueF p c scriptuniv
+      v <- genvalue c scriptuniv
       case addr of
         AddrBootstrap _ -> pure (AlonzoTxOut addr v SNothing)
         Addr _ paycred _ ->
@@ -192,7 +208,7 @@ genTxOut p c addruniv scriptuniv spendscriptuniv datauniv =
             else pure (AlonzoTxOut addr v SNothing)
     TxOutBabbageToConway -> do
       addr <- pick1 ["genTxOut BabbageToConway Addr"] addruniv
-      v <- genValueF p c scriptuniv
+      v <- genvalue c scriptuniv
       (ScriptF _ refscript) <- snd <$> genFromMap ["genTxOut, BabbageToConway, refscript case"] scriptuniv
       maybescript <- elements [SNothing, SJust refscript]
       case addr of
@@ -210,23 +226,22 @@ needsDatum _ _ = False
 
 genTxOuts ::
   Reflect era =>
+  (Coin -> Map (ScriptHash (EraCrypto era)) (ScriptF era) -> Gen (Value era)) ->
   Proof era ->
+  Int ->
   Set (Addr (EraCrypto era)) ->
   Map (ScriptHash (EraCrypto era)) (ScriptF era) ->
   Map (ScriptHash (EraCrypto era)) (ScriptF era) ->
   Map (DataHash (EraCrypto era)) (Data era) ->
   Gen [TxOutF era]
-genTxOuts p addruniv scriptuniv spendscriptuniv datauniv = do
+genTxOuts genvalue p ntxouts addruniv scriptuniv spendscriptuniv datauniv = do
   let genOne = do
         c <- noZeroCoin
-        genTxOut p c addruniv scriptuniv spendscriptuniv datauniv
-  vectorOf 30 (TxOutF p <$> genOne)
+        genTxOut genvalue p c addruniv scriptuniv spendscriptuniv datauniv
+  vectorOf ntxouts (TxOutF p <$> genOne)
 
 -- ==================================================================
 -- MultiAssets
-
-assets :: Set AssetName
-assets = Set.fromList [AssetName (fromString (show (n :: Int) ++ "Asset")) | n <- [0 .. 9]]
 
 genMultiAssetTriple ::
   Map.Map (ScriptHash (EraCrypto era)) (ScriptF era) ->
@@ -238,16 +253,6 @@ genMultiAssetTriple scriptMap assetSet genAmount =
     <$> (PolicyID . fst <$> (genFromMap [] scriptMap))
     <*> (fst <$> (itemFromSet [] assetSet))
     <*> genAmount
-
-multiAsset :: Map.Map (ScriptHash (EraCrypto era)) (ScriptF era) -> Gen (MultiAsset (EraCrypto era))
-multiAsset scripts = do
-  n <- elements [0, 1, 2]
-  if n == 0
-    then pure mempty -- About 1/3 of the list will be the empty MA
-    else do
-      -- So lots of duplicates, but we want to choose the empty MA, 1/3 of the time.
-      xs <- vectorOf n (genMultiAssetTriple scripts assets (choose (1, 100)))
-      pure $ multiAssetFromList xs
 
 -- ===================================================================
 -- Helper functions in the Gen monad.
@@ -369,19 +374,20 @@ makeValidityT begin current end =
     ^$ current
     ^$ end
 
-ptrUnivT :: Term era SlotNo -> Target era (Gen (Set Ptr))
-ptrUnivT x = Constr "" (setSized ["From init ptruniv"] 30) :$ (Constr "" genPtr ^$ x)
+ptrUnivT :: Int -> Term era SlotNo -> Target era (Gen (Set Ptr))
+ptrUnivT nptrs x = Constr "" (setSized ["From init ptruniv"] nptrs) :$ (Constr "" genPtr ^$ x)
 
 addrUnivT ::
   Proof era ->
+  Int ->
   Term era Network ->
   Term era (Set (Credential 'Payment (EraCrypto era))) ->
   Term era (Set Ptr) ->
   Term era (Set (Credential 'Staking (EraCrypto era))) ->
   Term era (Map (KeyHash 'Payment (EraCrypto era)) (Addr (EraCrypto era), Byron.SigningKey)) ->
   Target era (Gen (Set (Addr (EraCrypto era))))
-addrUnivT p net ps pts cs byronAddrUnivT =
-  Constr "" (setSized ["From addrUnivT"] 100)
+addrUnivT p naddr net ps pts cs byronAddrUnivT =
+  Constr "" (setSized ["From addrUnivT"] naddr)
     :$ (Constr "genAddrWith" (genAddrWith p) ^$ net ^$ ps ^$ pts ^$ cs ^$ byronAddrUnivT)
 
 makeHashScriptMapT ::
@@ -413,26 +419,26 @@ universePreds p =
   [ Sized (Range 100 500) currentSlot
   , Sized (Range 0 30) beginSlotDelta
   , Sized (Range 5 35) endSlotDelta
-  , Sized (ExactSize 50) keypairs
+  , Sized (ExactSize numKeys) keypairs
   , keymapUniv :<-: (Constr "xx" (\s -> Map.fromList (map (\x -> (hashKey (vKey x), x)) s)) ^$ keypairs)
-  , Sized (ExactSize 40) prePoolUniv
+  , Sized (ExactSize numPools) prePoolUniv
   , Subset prePoolUniv (Dom keymapUniv)
   , poolHashUniv :<-: (Constr "WitnessToStakePool" cast ^$ prePoolUniv)
-  , Sized (ExactSize 10) preStakeUniv
+  , Sized (ExactSize numStakeKeys) preStakeUniv
   , Subset preStakeUniv (Dom keymapUniv)
   , stakeHashUniv :<-: (Constr "WitnessToStaking" cast ^$ preStakeUniv)
-  , Sized (ExactSize 20) preGenesisUniv
+  , Sized (ExactSize numGenesisKeys) preGenesisUniv
   , Subset preGenesisUniv (Dom keymapUniv)
   , preGenesisDom :<-: (Constr "WitnessToGenesis" cast ^$ preGenesisUniv)
   , preGenesisDom :=: (Dom genesisHashUniv)
-  , Sized (ExactSize 40) preVoteUniv
+  , Sized (ExactSize numVoteKeys) preVoteUniv
   , Subset preVoteUniv (Dom keymapUniv)
   , voteCredUniv :<-: (Constr "WitnessToStakePool" castCred ^$ preVoteUniv)
-  , Sized (ExactSize 40) txinUniv
+  , Sized (ExactSize numTxIn) txinUniv
   , Member (Right feeTxIn) txinUniv
   , validityInterval :<-: makeValidityT beginSlotDelta currentSlot endSlotDelta
   , Choose
-      (ExactSize 30)
+      (ExactSize numCredentials)
       credList
       [ (1, scriptHashObjT scripthash, [Member (Left scripthash) (Dom (nonSpendScriptUniv p))])
       , (1, keyHashObjT keyhash, [Member (Left keyhash) (Dom keymapUniv)])
@@ -450,16 +456,16 @@ universePreds p =
   , spendCredsUniv :<-: listToSetTarget spendcredList
   , currentEpoch :<-: (Constr "epochFromSlotNo" epochFromSlotNo ^$ currentSlot)
   , GenFrom dataUniv (Constr "dataWits" (genDataWits p) ^$ (Lit IntR 30))
-  , GenFrom datumsUniv (Constr "genDatums" (genDatums 30) ^$ dataUniv)
+  , GenFrom datumsUniv (Constr "genDatums" (genDatums numDatums) ^$ dataUniv)
   , -- 'network' is set by testGlobals which contains 'Testnet'
     network :<-: constTarget (Utils.networkId Utils.testGlobals)
-  , GenFrom ptrUniv (ptrUnivT currentSlot)
+  , GenFrom ptrUniv (ptrUnivT numPtr currentSlot)
   , GenFrom byronAddrUniv (Constr "byronUniv" genByronUniv ^$ network)
-  , GenFrom addrUniv (addrUnivT p network spendCredsUniv ptrUniv credsUniv byronAddrUniv)
-  , GenFrom multiAssetUniv (Constr "multiAsset" (vectorOf 50 . multiAsset) ^$ (nonSpendScriptUniv p))
+  , GenFrom addrUniv (addrUnivT p numAddr network spendCredsUniv ptrUniv credsUniv byronAddrUniv)
+  , GenFrom multiAssetUniv (Constr "multiAsset" (vectorOf numMultiAsset . multiAsset) ^$ (nonSpendScriptUniv p))
   , GenFrom
       preTxoutUniv
-      ( Constr "genTxOuts" (genTxOuts p)
+      ( Constr "genTxOuts" (genTxOuts (genValueF p) p numTxOuts)
           ^$ addrUniv
           ^$ (nonSpendScriptUniv p)
           ^$ (spendscriptUniv p)
@@ -469,7 +475,6 @@ universePreds p =
       (colTxoutUniv p)
       ( Constr
           "colTxOutUniv"
-          -- (\x -> setSized ["From init colTxoutUniv"] 20 (colTxOutT p (Set.filter (noScripts p) x)))
           (\x -> colTxOutSetT p (Set.filter (noScripts p) x))
           ^$ addrUniv
       )
@@ -511,6 +516,22 @@ universePreds p =
     preGenesisUniv = Var (V "preGenesisUniv" (SetR WitHashR) No)
     preGenesisDom = Var (V "preGenesisDom" (SetR GenHashR) No)
     preVoteUniv = Var (V "preVoteUniv" (SetR WitHashR) No)
+
+multiAsset :: Map.Map (ScriptHash (EraCrypto era)) (ScriptF era) -> Gen (MultiAsset (EraCrypto era))
+multiAsset scripts = do
+  let assets = Set.fromList [AssetName (fromString (show (n :: Int) ++ "Asset")) | n <- [0 .. maxAssets]]
+  n <- elements [0 .. maxPolicyID]
+  if n == 0
+    then pure mempty -- About 1/3 of the list will be the empty MA
+    else do
+      -- So lots of duplicates, but we want to choose the empty MA, 1/3 of the time.
+      xs <- vectorOf n (genMultiAssetTriple scripts assets (choose (1, 100)))
+      pure $ multiAssetFromList xs
+
+genValueF :: Proof era -> Coin -> Map (ScriptHash (EraCrypto era)) (ScriptF era) -> Gen (Value era)
+genValueF proof (Coin c) scripts = case whichValue proof of
+  ValueShelleyToAllegra -> pure (Coin c)
+  ValueMaryToConway -> MaryValue c <$> multiAsset scripts
 
 stakeToVote :: Credential 'Staking c -> Credential 'DRepRole c
 stakeToVote = coerceKeyRole

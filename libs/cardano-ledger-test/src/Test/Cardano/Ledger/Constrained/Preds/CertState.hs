@@ -46,9 +46,9 @@ manyCoin size = do
 vstatePreds :: Proof era -> [Pred era]
 vstatePreds _p =
   [ Sized (Range 3 8) dreps
-  , Sized (Range 5 7) (Dom ccHotKeys)
+  , Sized (Range 5 7) (Dom committeeState)
   , Subset (Dom dreps) voteUniv
-  , Subset (Dom ccHotKeys) voteCredUniv
+  , Subset (Dom committeeState) voteCredUniv
   ]
 
 vstateStage ::

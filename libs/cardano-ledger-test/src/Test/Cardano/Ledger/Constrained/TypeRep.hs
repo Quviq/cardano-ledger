@@ -53,7 +53,6 @@ import Cardano.Ledger.Alonzo.UTxO (AlonzoScriptsNeeded (..))
 import Cardano.Ledger.AuxiliaryData (AuxiliaryDataHash (..))
 import Cardano.Ledger.BaseTypes (EpochNo (..), Network (..), ProtVer (..), SlotNo (..), mkTxIxPartial)
 import Cardano.Ledger.Binary.Version (Version)
-import Cardano.Ledger.CertState (CommitteeState, DRepState)
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Conway.Governance (GovAction (..))
 import Cardano.Ledger.Conway.TxCert (ConwayTxCert (..))
@@ -61,10 +60,11 @@ import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Credential (Credential, Ptr)
 import Cardano.Ledger.Crypto (Crypto)
 import qualified Cardano.Ledger.Crypto as CC (Crypto (HASH))
+import Cardano.Ledger.DRepDistr (DRepState)
 import Cardano.Ledger.EpochBoundary (SnapShots (..))
 import Cardano.Ledger.Era (Era (EraCrypto))
 import Cardano.Ledger.Hashes (DataHash, EraIndependentScriptIntegrity, ScriptHash (..))
-import Cardano.Ledger.Keys (GenDelegPair (..), KeyHash, KeyRole (..))
+import Cardano.Ledger.Keys (GenDelegPair (..), GenDelegs (..), KeyHash, KeyRole (..))
 import Cardano.Ledger.Keys.Bootstrap (BootstrapWitness (..))
 import Cardano.Ledger.Language (Language (..))
 import Cardano.Ledger.Mary.Value (AssetName (..), MultiAsset (..), PolicyID (..))
@@ -92,6 +92,7 @@ import Cardano.Ledger.Shelley.TxBody (WitVKey (..))
 import Cardano.Ledger.Shelley.TxCert (MIRPot (..), ShelleyTxCert (..))
 import Cardano.Ledger.Shelley.UTxO (ShelleyScriptsNeeded (..))
 import Cardano.Ledger.TxIn (TxIn (..))
+import qualified Cardano.Ledger.UMap as UM
 import Cardano.Ledger.UTxO (UTxO (..))
 import Cardano.Ledger.Val (Val ((<+>)))
 import Data.ByteString (ByteString)
@@ -152,6 +153,8 @@ import Test.Cardano.Ledger.Generic.PrettyCore (
   pcCoin,
   pcConwayTxCert,
   pcDRep,
+  pcDRepState,
+  pcDState,
   pcData,
   pcDataHash,
   pcDatum,
@@ -286,7 +289,10 @@ data Rep era t where
   DRepR :: Rep era (Core.DRep (EraCrypto era))
   PoolMetadataR :: Proof era -> Rep era PoolMetadata
   DRepStateR :: Rep era (DRepState (EraCrypto era))
-  CommitteeStateR :: Rep era (CommitteeState era)
+  DStateR :: Rep era (DState era)
+
+-- Iff you add a new type to (Rep era t) be sure and add a case
+-- to testEql like   testEql TR TR = Just Refl
 
 stringR :: Rep era String
 stringR = ListR CharR
@@ -414,6 +420,8 @@ instance Singleton (Rep e) where
   testEql DRepR DRepR = Just Refl
   testEql (PoolMetadataR c) (PoolMetadataR d) =
     do Refl <- testEql c d; pure Refl
+  testEql DRepStateR DRepStateR = Just Refl
+  testEql DStateR DStateR = Just Refl
   testEql _ _ = Nothing
 
   cmpIndex x y = compare (shape x) (shape y)
@@ -510,7 +518,7 @@ instance Show (Rep era t) where
   show DRepR = "(DRep c)"
   show (PoolMetadataR _) = "PoolMetadata"
   show DRepStateR = "DRepState"
-  show CommitteeStateR = "CommitteeState"
+  show DStateR = "(DState c)"
 
 synopsis :: forall e t. Rep e t -> t -> String
 synopsis RationalR r = show r
@@ -611,8 +619,8 @@ synopsis StakeHashR k = "(KeyHash 'Staking " ++ show (keyHashSummary k) ++ ")"
 synopsis BoolR x = show x
 synopsis DRepR x = show (pcDRep x)
 synopsis (PoolMetadataR _) x = show x
-synopsis DRepStateR x = show x
-synopsis CommitteeStateR x = show x
+synopsis DRepStateR x = show (pcDRepState x)
+synopsis DStateR x = show (pcDState x)
 
 synSum :: Rep era a -> a -> String
 synSum (MapR _ CoinR) m = ", sum = " ++ show (pcCoin (Map.foldl' (<>) mempty m))
@@ -733,7 +741,7 @@ instance Shaped (Rep era) any where
   shape CommColdCredR = Nullary 85
   shape CommHotCredR = Nullary 86
   shape DRepStateR = Nullary 87
-  shape CommitteeStateR = Nullary 87
+  shape DStateR = Nullary 88
 
 compareRep :: forall era t s. Rep era t -> Rep era s -> Ordering
 compareRep = cmpIndex @(Rep era)
@@ -883,7 +891,14 @@ genSizedRep _ (PoolMetadataR p) =
     then PoolMetadata <$> arbitrary <*> (BS.take (hashsize p) <$> arbitrary)
     else PoolMetadata <$> arbitrary <*> arbitrary
 genSizedRep _ DRepStateR = arbitrary
-genSizedRep _ CommitteeStateR = arbitrary
+genSizedRep _ DStateR =
+  pure
+    ( DState
+        UM.empty
+        Map.empty
+        (GenDelegs Map.empty)
+        (InstantaneousRewards Map.empty Map.empty mempty mempty)
+    )
 
 genRep ::
   Era era =>
@@ -1013,8 +1028,8 @@ shrinkRep StakeHashR x = shrink x
 shrinkRep BoolR x = shrink x
 shrinkRep DRepR x = shrink x
 shrinkRep (PoolMetadataR _) _ = []
-shrinkRep DRepStateR _ = []
-shrinkRep CommitteeStateR _ = []
+shrinkRep DRepStateR x = shrink x
+shrinkRep DStateR _ = []
 
 -- ===========================
 
@@ -1134,7 +1149,7 @@ hasOrd rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
     help DRepR v = pure $ With v
     help (PoolMetadataR _) v = pure $ With v
     help DRepStateR v = pure $ With v
-    help CommitteeStateR v = pure $ With v
+    help DStateR _ = failT ["DState does not have Ord instance"]
 
 hasEq :: Rep era t -> s t -> Typed (HasConstraint Eq (s t))
 hasEq rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
@@ -1161,9 +1176,9 @@ hasEq rep xx = explain ("'hasOrd " ++ show rep ++ "' fails") (help rep xx)
       pure (With y)
 
 format :: Rep era t -> t -> String
-format rep@(MapR d r) x = show (ppMap (syn d) (syn r) x) ++ synSum rep x
-format rep@(ListR d) x = show (ppList (syn d) x) ++ synSum rep x
-format rep@(SetR d) x = show (ppSet (syn d) x) ++ synSum rep x
+format rep@(MapR d r) x = show (ppMap (syn d) (syn r) x) ++ synSum rep x ++ "\nsize=" ++ show (Map.size x)
+format rep@(ListR d) x = show (ppList (syn d) x) ++ synSum rep x ++ synSum rep x ++ "\nsize=" ++ show (length x)
+format rep@(SetR d) x = show (ppSet (syn d) x) ++ synSum rep x ++ synSum rep x ++ "\nsize=" ++ show (Set.size x)
 format (MaybeR d) x = show (ppMaybe (syn d) x)
 format r x = synopsis r x
 

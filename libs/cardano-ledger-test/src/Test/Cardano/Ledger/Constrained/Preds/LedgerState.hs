@@ -20,7 +20,7 @@ import Test.Cardano.Ledger.Constrained.Monad (Typed, failT, monadTyped)
 import Test.Cardano.Ledger.Constrained.Preds.CertState (dstateStage, pstateStage, vstateStage)
 import Test.Cardano.Ledger.Constrained.Preds.PParams (pParamsStage)
 import Test.Cardano.Ledger.Constrained.Preds.Repl (goRepl)
-import Test.Cardano.Ledger.Constrained.Preds.Universes (universeStage)
+import Test.Cardano.Ledger.Constrained.Preds.Universes (numColUtxo, numPreUtxo, universeStage)
 import Test.Cardano.Ledger.Constrained.Rewrite (standardOrderInfo)
 import Test.Cardano.Ledger.Constrained.Size (Size (..))
 import Test.Cardano.Ledger.Constrained.Solver (toolChainSub)
@@ -34,15 +34,15 @@ import Test.QuickCheck
 
 ledgerStatePreds :: forall era. Reflect era => Proof era -> [Pred era]
 ledgerStatePreds p =
-  [ MetaSize (SzRng 20 25) utxoSize -- must be bigger than sum of (maxsize inputs 10) and (mazsize collateral 3)
+  [ MetaSize (SzRng 90 numPreUtxo) utxoSize -- must be bigger than sum of (maxsize inputs 10) and (mazsize collateral 3)
   , Sized utxoSize preUtxo
-  , Sized (Range 14 16) colUtxo
+  , Sized (Range 15 numColUtxo) colUtxo
   , MapMember feeTxIn feeTxOut (Right preUtxo)
-  , Subset (Dom preUtxo) txinUniv
+  , -- , Before feeTxIn colUtxo
+    Subset (Dom preUtxo) txinUniv
   , Subset (Rng preUtxo) (txoutUniv p)
   , utxo p :<-: (Constr "mapunion" Map.union ^$ preUtxo ^$ colUtxo)
-  , --
-    Disjoint (Dom colUtxo) (Dom preUtxo)
+  , Disjoint (Dom preUtxo) (Dom colUtxo)
   , Subset (Dom colUtxo) txinUniv
   , Subset (Rng colUtxo) (colTxoutUniv p)
   , NotMember feeTxIn (Dom colUtxo)
@@ -55,6 +55,9 @@ ledgerStatePreds p =
   , Random (proposalsT p)
   , Random (futureProposalsT p)
   , ledgerState :<-: (ledgerStateT p)
+  , Sized (Range 1 10) donation
+  , prevPParams p :<-: (Constr "id" id ^$ (pparams p))
+  , currPParams p :<-: (Constr "id" id ^$ (pparams p))
   ]
   where
     colUtxo = Var (V "colUtxo" (MapR TxInR (TxOutR p)) No)
