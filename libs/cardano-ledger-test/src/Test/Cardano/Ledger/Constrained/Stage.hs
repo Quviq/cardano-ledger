@@ -3,22 +3,26 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Test.Cardano.Ledger.Constrained.Stage where
 
+import Test.Cardano.Ledger.Constrained.Shrink
 import Cardano.Ledger.Pretty (ppMap, ppMaybe)
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState (..), certDStateL, esLStateL, lsCertStateL, nesEsL)
 import qualified Data.Map.Strict as Map
 import Data.Pulse (foldlM')
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Maybe
 import Test.Cardano.Ledger.Constrained.Ast
-import Test.Cardano.Ledger.Constrained.Env (Access (..), Env, Name, P (..), V (..), bulkStore, emptyEnv)
-import Test.Cardano.Ledger.Constrained.Monad (monadTyped)
+import Test.Cardano.Ledger.Constrained.Env (Access (..), Env, Name, P (..), V (..), bulkStore, emptyEnv, Name(..), Field(..), AnyF(..), Payload(..), findName, storeName)
+import Test.Cardano.Ledger.Constrained.Monad (monadTyped, runTyped)
 import Test.Cardano.Ledger.Constrained.Preds.CertState (certStatePreds, pstatePreds, vstatePreds)
 import Test.Cardano.Ledger.Constrained.Preds.LedgerState (ledgerStatePreds)
 import Test.Cardano.Ledger.Constrained.Preds.PParams (pParamsPreds)
 import Test.Cardano.Ledger.Constrained.Preds.Universes (universePreds)
+import Test.Cardano.Ledger.Constrained.Classes
 import Test.Cardano.Ledger.Constrained.Rewrite (
   DependGraph (..),
   OrderInfo,
@@ -93,6 +97,93 @@ solvePipeline pipes = do
   let sub = Subst (Map.filterWithKey (\k _ -> isTempV k) subst)
   env <- monadTyped (substToEnv sub emptyEnv)
   pure (env, gr)
+
+runPipeline :: Reflect era => Pipeline era -> Target era a -> Gen (Gen a, a -> [a])
+runPipeline pipe target = do
+  (_, graph) <- mergePipeline 0 pipe Set.empty (DependGraph [])
+  let generator = do
+        let DependGraph pairs = graph
+        Subst subst <- foldlM' solveOneVar emptySubst pairs
+        let isTempV k = not (elem '.' k)
+        let sub = Subst (Map.filterWithKey (\k _ -> isTempV k) subst)
+        env <- monadTyped (substToEnv sub emptyEnv)
+        monadTyped (runTarget env target)
+  pure $ (generator, const [])
+
+shrinkFromConstraints :: Reflect era => Rep era t -> DependGraph era -> Target era t -> t -> [t]
+shrinkFromConstraints rep graph target val = do
+  let DependGraph ps = graph
+      cs = concatMap snd ps
+      env = saturateEnv (unTarget rep target val) cs
+  env' <- shrinkEnv graph env
+  monadTyped $ runTarget env' target
+
+unTarget :: Reflect era => Rep era t -> Target era t -> t -> Env era
+unTarget rep target v =
+    Env $ Map.fromList [ (x, Payload repX (v ^. lens) acc)
+                       | Name (V x repX acc@(Yes rep' lens)) <- names
+                       , Just Refl <- [testEql rep rep']
+                       ]
+  where names = Set.toList $ varsOfTarget mempty target
+
+-- | Add variables to the environment that are uniquely determined by the constraints.
+saturateEnv :: Reflect era => Env era -> [Pred era] -> Env era
+saturateEnv env0 preds = go env0 preds
+  where
+    go env [] = env
+    go env (p : ps)
+      | Just (x, v) <- solveUnknown env p = saturateEnv (storeName x v env) preds
+      | otherwise                         = go env ps
+
+solveUnknown :: forall era. Reflect era => Env era -> Pred era -> Maybe (Name era, Payload era)
+solveUnknown env p = case p of
+
+  SumsTo _ (Var x@(V _ rep acc)) EQL sums
+    | unknown (Name x)
+    , knownSums sums
+    , Right v <- runTyped (sumAdds <$> mapM (runSum env) sums) ->
+      Just (Name x, Payload rep v acc)
+
+  Component (direct -> tm) (AnyF (Field s rep reps lens) : _)
+    | knownTerm tm
+    , unknown x
+    , Right r <- runTyped (runTerm env tm) ->
+        Just (x, Payload rep (r ^. lens) acc)
+    where
+      acc = Yes reps lens
+      x = Name (V s rep acc)
+
+  Component r (_ : flds) ->
+    solveUnknown env (Component r flds)
+
+  tm :=: Var x@(V _ rep acc)
+    | knownTerm tm
+    , unknown (Name x)
+    , Right v <- runTyped (runTerm env tm) ->
+      Just (Name x, Payload rep v acc)
+
+  Var x@(V _ rep acc) :=: tm
+    | knownTerm tm
+    , unknown (Name x)
+    , Right v <- runTyped (runTerm env tm) ->
+      Just (Name x, Payload rep v acc)
+
+  _ -> Nothing
+
+  where
+    known   = isJust . flip findName env
+    unknown = not . known
+    knownTerm :: forall t. Term era t -> Bool
+    knownTerm = all known . varsOfTerm mempty
+    knownSums :: forall r. [Sum era r] -> Bool
+    knownSums = all known . foldl varsOfSum mempty
+
+runPipelineTest :: IO ()
+runPipelineTest = do
+  let proof = Conway Standard
+  (generator, _shrinker) <- generate $ runPipeline (ledgerPipeline proof) (ledgerStateT proof)
+  st <- generate generator
+  return ()
 
 -- ======================================================================
 -- Experiment number 1, change the Access in the Vars in a Target
