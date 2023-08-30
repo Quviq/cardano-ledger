@@ -16,7 +16,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Maybe
 import Test.Cardano.Ledger.Constrained.Ast
-import Test.Cardano.Ledger.Constrained.Env (Access (..), Env, Name, P (..), V (..), bulkStore, emptyEnv, Name(..), Field(..), AnyF(..), Payload(..), findName, storeName)
+import Test.Cardano.Ledger.Constrained.Env (Access (..), Env(..), Name, P (..), V (..), bulkStore, emptyEnv, Name(..), Field(..), AnyF(..), Payload(..), findName, storeName)
 import Test.Cardano.Ledger.Constrained.Monad (monadTyped, runTyped)
 import Test.Cardano.Ledger.Constrained.Preds.CertState (certStatePreds, pstatePreds, vstatePreds)
 import Test.Cardano.Ledger.Constrained.Preds.LedgerState (ledgerStatePreds)
@@ -98,8 +98,10 @@ solvePipeline pipes = do
   env <- monadTyped (substToEnv sub emptyEnv)
   pure (env, gr)
 
-runPipeline :: Reflect era => Pipeline era -> Target era a -> Gen (Gen a, a -> [a])
-runPipeline pipe target = do
+-- TODO: we might be able to get rid of the `Rep era a` argument here once we
+-- merge the stuff we did with typeable on the other branch into master
+runPipeline :: Reflect era => Pipeline era -> Target era a -> Rep era a -> Gen (Gen a, a -> [a])
+runPipeline pipe target rep = do
   (_, graph) <- mergePipeline 0 pipe Set.empty (DependGraph [])
   let generator = do
         let DependGraph pairs = graph
@@ -108,7 +110,7 @@ runPipeline pipe target = do
         let sub = Subst (Map.filterWithKey (\k _ -> isTempV k) subst)
         env <- monadTyped (substToEnv sub emptyEnv)
         monadTyped (runTarget env target)
-  pure $ (generator, const [])
+  pure $ (generator, shrinkFromConstraints rep graph target)
 
 shrinkFromConstraints :: Reflect era => Rep era t -> DependGraph era -> Target era t -> t -> [t]
 shrinkFromConstraints rep graph target val = do
@@ -118,11 +120,11 @@ shrinkFromConstraints rep graph target val = do
   env' <- shrinkEnv graph env
   monadTyped $ runTarget env' target
 
-unTarget :: Reflect era => Rep era t -> Target era t -> t -> Env era
+unTarget :: Rep era t -> Target era t -> t -> Env era
 unTarget rep target v =
-    Env $ Map.fromList [ (x, Payload repX (v ^. lens) acc)
-                       | Name (V x repX acc@(Yes rep' lens)) <- names
-                       , Just Refl <- [testEql rep rep']
+    Env $ Map.fromList [ (x, Payload repX (v ^. l) acc)
+                       | Name (V x repX acc@(Yes rep' l)) <- names
+                       , Just Refl <- [testEql rep rep'] -- TODO: this could be replaced by knowing `Typeable t` and `Rep era t -> Dict (Typeable t)`
                        ]
   where names = Set.toList $ varsOfTarget mempty target
 
@@ -144,13 +146,13 @@ solveUnknown env p = case p of
     , Right v <- runTyped (sumAdds <$> mapM (runSum env) sums) ->
       Just (Name x, Payload rep v acc)
 
-  Component (direct -> tm) (AnyF (Field s rep reps lens) : _)
+  Component (direct -> tm) (AnyF (Field s rep reps l) : _)
     | knownTerm tm
     , unknown x
     , Right r <- runTyped (runTerm env tm) ->
-        Just (x, Payload rep (r ^. lens) acc)
+        Just (x, Payload rep (r ^. l) acc)
     where
-      acc = Yes reps lens
+      acc = Yes reps l
       x = Name (V s rep acc)
 
   Component r (_ : flds) ->
@@ -181,8 +183,9 @@ solveUnknown env p = case p of
 runPipelineTest :: IO ()
 runPipelineTest = do
   let proof = Conway Standard
-  (generator, _shrinker) <- generate $ runPipeline (ledgerPipeline proof) (ledgerStateT proof)
+  (generator, shrinker) <- generate $ runPipeline (ledgerPipeline proof) (ledgerStateT proof) (LedgerStateR proof)
   st <- generate generator
+  print (length $ shrinker st)
   return ()
 
 -- ======================================================================
