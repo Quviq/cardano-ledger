@@ -33,7 +33,7 @@ Gen a, a -> [a], a -> Bool
 -- | Translate a Pipe into a DependGraph, given the set
 --   of variables that have aready been solved for.
 pipeToGraph :: Stage era -> Set (Name era) -> TraceM era (DependGraph era)
-pipeToGraph (Stage info ps) alreadyDefined = do
+pipeToGraph (Stage _ info ps) alreadyDefined = do
   simple <- liftCounter rewriteGen ps
   orderedNames <- liftTyped $ initialOrder info simple
   liftTyped $ mkDependGraph (length orderedNames) [] alreadyDefined orderedNames [] (Prelude.filter notBefore simple)

@@ -55,25 +55,28 @@ Gen a, a -> [a], a -> Bool
 
 -- | Group together some Preds and OrderInfo about how to decide the
 --   order in which to solve the variables appearing in the Preds
-data Stage era = Stage OrderInfo [Pred era]
+data Stage era = Stage StageType OrderInfo [Pred era]
+
+data StageType = UniverseStage
+               | ConstraintStage
 
 type Pipeline era = [Stage era]
 
 -- | A pipeline for specifying the LederState
 ledgerPipeline :: Reflect era => Proof era -> Pipeline era
 ledgerPipeline proof =
-  [ Stage standardOrderInfo (pParamsPreds proof)
-  , Stage standardOrderInfo (universePreds proof)
-  , Stage standardOrderInfo (vstatePreds proof)
-  , Stage standardOrderInfo (pstatePreds proof)
-  , Stage standardOrderInfo (certStatePreds proof)
-  , Stage standardOrderInfo (ledgerStatePreds proof)
+  [ Stage UniverseStage   standardOrderInfo (pParamsPreds proof)
+  , Stage UniverseStage   standardOrderInfo (universePreds proof)
+  , Stage ConstraintStage standardOrderInfo (vstatePreds proof)
+  , Stage ConstraintStage standardOrderInfo (pstatePreds proof)
+  , Stage ConstraintStage standardOrderInfo (certStatePreds proof)
+  , Stage ConstraintStage standardOrderInfo (ledgerStatePreds proof)
   ]
 
 -- | Translate a Stage into a DependGraph, given the set
 --   of variables that have aready been solved for.
 stageToGraph :: Int -> Stage era -> Set (Name era) -> Gen (Int, DependGraph era)
-stageToGraph n0 (Stage info ps) alreadyDefined = do
+stageToGraph n0 (Stage _ info ps) alreadyDefined = do
   (n1, simple) <- rewriteGen (n0, ps)
   orderedNames <- monadTyped $ initialOrder info simple
   graph <- monadTyped $ mkDependGraph (length orderedNames) [] alreadyDefined orderedNames [] (Prelude.filter notBefore simple)
@@ -81,17 +84,23 @@ stageToGraph n0 (Stage info ps) alreadyDefined = do
 
 -- | Merge a Pipeline into an existing DependGraph, given the set of variables
 --   that have aready been solved for, to get a larger DependGraph
-mergePipeline :: Int -> Pipeline era -> Set (Name era) -> DependGraph era -> Gen (Int, DependGraph era)
-mergePipeline n [] _ graph = pure (n, graph)
-mergePipeline n0 (pipe : more) defined (DependGraph xs) = do
-  (n1, DependGraph ys) <- stageToGraph n0 pipe defined
+mergePipeline :: Int -> Pipeline era -> Set (Name era) -> [(StageType, DependGraph era)] -> Gen [(StageType, DependGraph era)]
+mergePipeline _ [] _ graphs = pure $ reverse graphs
+mergePipeline n0 (pipe@(Stage st _ _) : more) defined graphs = do
+  (n1, g@(DependGraph ys)) <- stageToGraph n0 pipe defined
   let names = concat (map fst ys)
-  mergePipeline n1 more (Set.union (Set.fromList names) defined) (DependGraph (xs ++ ys))
+  mergePipeline n1 more (Set.union (Set.fromList names) defined) ((st, g) : graphs)
+
+makeGenGraph :: [(StageType, DependGraph era)] -> DependGraph era
+makeGenGraph pairs = DependGraph [ p | (_, DependGraph gr) <- pairs, p <- gr ]
+
+makeShrinkGraph :: [(StageType, DependGraph era)] -> DependGraph era
+makeShrinkGraph pairs = DependGraph [ p | (ConstraintStage, DependGraph gr) <- pairs, p <- gr ]
 
 -- | Solve a Pipeline to get both an Env and a DependGraph
 solvePipeline :: Reflect era => Pipeline era -> Gen (Env era, DependGraph era)
 solvePipeline pipes = do
-  (_, gr@(DependGraph pairs)) <- mergePipeline 0 pipes Set.empty (DependGraph [])
+  gr@(DependGraph pairs) <- makeGenGraph <$> mergePipeline 0 pipes Set.empty []
   Subst subst <- foldlM' solveOneVar emptySubst pairs
   let isTempV k = not (elem '.' k)
   let sub = Subst (Map.filterWithKey (\k _ -> isTempV k) subst)
@@ -102,15 +111,15 @@ solvePipeline pipes = do
 -- merge the stuff we did with typeable on the other branch into master
 runPipeline :: Reflect era => Pipeline era -> Target era a -> Rep era a -> Gen (Gen a, a -> [a])
 runPipeline pipe target rep = do
-  (_, graph) <- mergePipeline 0 pipe Set.empty (DependGraph [])
+  graphs <- mergePipeline 0 pipe Set.empty []
   let generator = do
-        let DependGraph pairs = graph
+        let DependGraph pairs = makeGenGraph graphs
         Subst subst <- foldlM' solveOneVar emptySubst pairs
         let isTempV k = not (elem '.' k)
         let sub = Subst (Map.filterWithKey (\k _ -> isTempV k) subst)
         env <- monadTyped (substToEnv sub emptyEnv)
         monadTyped (runTarget env target)
-  pure $ (generator, shrinkFromConstraints rep graph target)
+  pure $ (generator, shrinkFromConstraints rep (makeShrinkGraph graphs) target)
 
 shrinkFromConstraints :: Reflect era => Rep era t -> DependGraph era -> Target era t -> t -> [t]
 shrinkFromConstraints rep graph target val = do
