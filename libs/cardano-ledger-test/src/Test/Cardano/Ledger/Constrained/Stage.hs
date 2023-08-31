@@ -65,7 +65,7 @@ type Pipeline era = [Stage era]
 -- | A pipeline for specifying the LederState
 ledgerPipeline :: Reflect era => Proof era -> Pipeline era
 ledgerPipeline proof =
-  [ Stage UniverseStage   standardOrderInfo (pParamsPreds proof)
+  [ Stage ConstraintStage standardOrderInfo (pParamsPreds proof)
   , Stage UniverseStage   standardOrderInfo (universePreds proof)
   , Stage ConstraintStage standardOrderInfo (vstatePreds proof)
   , Stage ConstraintStage standardOrderInfo (pstatePreds proof)
@@ -196,6 +196,7 @@ runPipelineTest = do
                                                   (ledgerStateT proof)
                                                   (ReAccess (LedgerStateR proof) $ nesEsL . esLStateL)
   st <- generate generator
+  -- TODO: This doesn't work work because of poolDistr
   print (length $ shrinker st)
   return ()
 
