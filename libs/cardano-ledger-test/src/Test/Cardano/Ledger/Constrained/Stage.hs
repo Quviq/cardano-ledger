@@ -109,8 +109,8 @@ solvePipeline pipes = do
 
 -- TODO: we might be able to get rid of the `Rep era a` argument here once we
 -- merge the stuff we did with typeable on the other branch into master
-runPipeline :: Reflect era => Pipeline era -> Target era a -> Rep era a -> Gen (Gen a, a -> [a])
-runPipeline pipe target rep = do
+runPipeline :: Reflect era => Pipeline era -> Target era a -> ReAccess era a -> Gen (Gen a, a -> [a])
+runPipeline pipe target re = do
   graphs <- mergePipeline 0 pipe Set.empty []
   let generator = do
         let DependGraph pairs = makeGenGraph graphs
@@ -119,10 +119,10 @@ runPipeline pipe target rep = do
         let sub = Subst (Map.filterWithKey (\k _ -> isTempV k) subst)
         env <- monadTyped (substToEnv sub emptyEnv)
         monadTyped (runTarget env target)
-  pure $ (generator, shrinkFromConstraints rep (makeShrinkGraph graphs) target)
+  pure $ (generator, shrinkFromConstraints re (makeShrinkGraph graphs) target)
 
-shrinkFromConstraints :: Reflect era => Rep era t -> DependGraph era -> Target era t -> t -> [t]
-shrinkFromConstraints rep graph target val = do
+shrinkFromConstraints :: Reflect era => ReAccess era t -> DependGraph era -> Target era t -> t -> [t]
+shrinkFromConstraints re@(ReAccess rep _) graph (flip reAccessTarget re -> target) val = do
   let DependGraph ps = graph
       cs = concatMap snd ps
       env = saturateEnv (unTarget rep target val) cs
@@ -192,7 +192,9 @@ solveUnknown env p = case p of
 runPipelineTest :: IO ()
 runPipelineTest = do
   let proof = Conway Standard
-  (generator, shrinker) <- generate $ runPipeline (ledgerPipeline proof) (ledgerStateT proof) (LedgerStateR proof)
+  (generator, shrinker) <- generate $ runPipeline (ledgerPipeline proof)
+                                                  (ledgerStateT proof)
+                                                  (ReAccess (LedgerStateR proof) $ nesEsL . esLStateL)
   st <- generate generator
   print (length $ shrinker st)
   return ()
